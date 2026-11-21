@@ -1,0 +1,8 @@
+biopython>=1.80
+numpy>=1.23
+pandas>=1.5
+scipy>=1.9
+matplotlib>=3.6
+pydssp>=0.9
+scikit-image>=0.20
+requests>=2.28
