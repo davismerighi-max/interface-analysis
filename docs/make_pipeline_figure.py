@@ -137,10 +137,10 @@ STEPS = [
                     tool='geometry, from the model', flag='lig',
                     out=['ligand_contacts.csv']),
                dict(act='shape complementarity and gap volume', icon='fit',
-                    tool='interface_shape.py\nSciPy + scikit-image', flag='shape',
+                    tool='interface_shape.py\nSciPy + scikit-image',
                     out=['interface_shape.csv'])],
          opts='--resolution  --names  --contact-cut  --sasa-points  --intra  '
-              '--shape  --shape-spacing  --shape-workers  --no-ligands  '
+              '--no-shape  --shape-spacing  --shape-workers  --no-ligands  '
               '--min-ligand-atoms'),
     dict(tag='02', cmd='02_derive_tables.py  MODEL.pdb',
          flow=[dict(act='read run_config.json and the step-01 tables', icon='table',
@@ -174,7 +174,7 @@ STEPS = [
                     out=['fig_contact_maps', 'figS1_contact_maps_all',
                          'fig_architecture']),
                dict(act='area partition, chemistry, inventory and packing figures',
-                    icon='stats', tool='matplotlib', flag='shape',
+                    icon='stats', tool='matplotlib',
                     out=['fig_area_partition', 'fig_chemistry', 'fig_inventory',
                          'fig_packing']),
                dict(act='residue-level interaction networks, bond length to scale',
@@ -183,10 +183,13 @@ STEPS = [
                dict(act='model with buried area in the B-factor column, plus two '
                         'ChimeraX command files', icon='cube', tool='plain text',
                     out=['model_interfaces.pdb', 'chimerax_colour_only.cxc',
-                         'chimerax_colour_by_interaction.cxc'])],
+                         'chimerax_colour_by_interaction.cxc']),
+               dict(act='two licorice renders of the whole model: by burying partner '
+                        'and by interaction type', icon='cube', tool='render_assembly.py',
+                    out=['fig_render_budget', 'fig_render_interactions'])],
          opts='--per-line  --colours  --bsa-min  --solvation-track  --no-interaction-track  '
               '--network-min  --phobic-min  --network-per-page  --sc-offset  '
-              '--conservation  --msa'),
+              '--conservation  --msa  --no-render  --render-view'),
 ]
 
 
@@ -333,7 +336,7 @@ EXPL = {'nuc': 'behaves differently when DNA or RNA chains are present',
         'shape': 'runs only if you ask for it',
         'lig': 'only does something when the model has them'}
 bx, by = MARG, y - 0.50
-for _k in ('nuc', 'prot', 'shape', 'lig'):
+for _k in ('nuc', 'prot', 'lig'):
     fc, tc, bt = BADGE[_k]
     bw = tw(bt, 4.2) + 0.10
     expl = EXPL[_k]
@@ -441,8 +444,9 @@ for k in range(len(STEPS) - 1):
 # ---------------------------------------------------------------- footer row
 fy = ytop - BODY - 0.10
 box(ax, MARG, fy - 0.40, CW * 2 + GAPC, 0.40, C_OPT, '#D8D8D4', lw=0.7)
-wrap(ax, MARG + 0.09, fy - 0.045, 'optional input to step 03:  a ConSurf .grades file or '
-     'an aligned FASTA. You supply it; nothing is ever fetched from the network.',
+wrap(ax, MARG + 0.09, fy - 0.045, 'optional input to step 03:  a ConSurf .grades file or an alignment per protein '
+     '(FASTA, A3M, Clustal, Stockholm) for the conservation track; without one the '
+     'track is left out. You supply it; nothing is ever fetched from the network.',
      CW * 2 + GAPC - 0.18, 5.0, '#4A4A4A')
 x3 = MARG + 2 * (CW + GAPC)
 box(ax, x3, fy - 0.40, CW, 0.40, '#FAFAF8', '#C9C9C5', lw=0.8)
