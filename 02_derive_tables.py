@@ -367,7 +367,7 @@ with RPT.guard('energetics', ok_detail='interface_energetics.csv'):
 
 # ---------------------------------------------------------------- packing quality
 with RPT.guard('packing statistics', ok_detail='reported'):
-    # Present only when step 01 was run with --shape.
+    # Present unless step 01 was run with --no-shape.
     if 'sc' in S.columns and S.sc.notna().any():
         SHP = S.dropna(subset=['sc'])
         say('\nshape complementarity (Lawrence & Colman Sc) and gap index, by category:')
