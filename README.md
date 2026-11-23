@@ -52,17 +52,28 @@ git clone https://github.com/davismerighi-max/interface-analysis.git
 cd interface-analysis
 pip install -r requirements.txt
 
-# everything runs in one working directory, in this order
-python 01_interface_analysis.py  MODEL.pdb  --resolution 2.6
-python 02_derive_tables.py       MODEL.pdb
-python 03_make_figures.py        MODEL.pdb
-python 05_assemblies.py          MODEL.pdb  --render
+# one working folder per model; the code can stay where you cloned it
+mkdir -p runs/MODEL && cp MODEL.pdb runs/MODEL/ && cd runs/MODEL
+CODE=../..        # the cloned repository
+python $CODE/01_interface_analysis.py  MODEL.pdb  --resolution 2.6
+python $CODE/02_derive_tables.py       MODEL.pdb
+python $CODE/03_make_figures.py        MODEL.pdb
+python $CODE/05_assemblies.py          MODEL.pdb  --render
+python $CODE/06_organise_results.py    MODEL.pdb   # -> MODEL_results/, one folder per figure
 ```
 
 That is the whole pipeline. Step 01 writes the measurements, step 02 derives the tables
 and the statistics report, step 03 draws the figures, step 05 proposes candidate
-assemblies. After any step, open `run_report.txt` to see what worked, what ran with
-defaults and what failed. Each step reads what the previous
+assemblies, step 06 copies the results into `MODEL_results/`: one folder per figure with
+its PNG, PDF and the tables it was drawn from, plus `00_report/`, `inputs/`, `code/` and
+`logs/`, indexed in `README.txt`. After any step, open `run_report.txt` to see what worked,
+what ran with defaults and what failed.
+
+Use **one working folder per model**. A file name like `fig1_<protein>_footprints` depends
+on the protein name, so a second model (or a second name) in the same folder adds new files
+next to the old ones rather than replacing them; step 06 only collects the files of the
+current run (each step records what it wrote in `run_manifest.json`), and step 01 empties
+the tables an earlier model left that this one does not produce (ligands, cross-links). Each step reads what the previous
 one left in the directory, so you can re-run step 03 with different figure options
 without repeating the expensive work.
 
