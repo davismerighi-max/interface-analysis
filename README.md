@@ -53,7 +53,7 @@ cd interface-analysis
 pip install -r requirements.txt
 
 # everything runs in one working directory, in this order
-python 01_interface_analysis.py  MODEL.pdb  --resolution 2.6  --shape
+python 01_interface_analysis.py  MODEL.pdb  --resolution 2.6
 python 02_derive_tables.py       MODEL.pdb
 python 03_make_figures.py        MODEL.pdb
 python 05_assemblies.py          MODEL.pdb  --render
@@ -101,8 +101,8 @@ label every axis.
 
 **`01_interface_analysis.py`** — `--resolution` (quotes the map/data resolution in every
 report and sets the distance tolerances) · `--proteins FASTA` · `--names` · `--contact-cut` (5.0 Å) ·
-`--sasa-points` (100) · `--intra` (also analyse contacts within a chain) · `--shape`
-(shape complementarity and gap index; the slow part) · `--shape-spacing` (0.5 Å) ·
+`--sasa-points` (100) · `--intra` (also analyse contacts within a chain) · `--no-shape`
+(skip shape complementarity and gap index, on by default; the slow part) · `--shape-spacing` (0.5 Å) ·
 `--shape-workers` · `--no-ligands` · `--min-ligand-atoms` (5)
 
 **`02_derive_tables.py`** — no options; it reads the settings back from `run_config.json`.
@@ -110,7 +110,11 @@ report and sets the distance tolerances) · `--proteins FASTA` · `--names` · `
 **`03_make_figures.py`** — `--per-line` (350 residues) · `--colours` · `--bsa-min` ·
 `--solvation-track` · `--no-interaction-track` · `--network-min` · `--phobic-min` ·
 `--network-per-page` · `--sc-offset` · `--conservation` (a ConSurf `.grades` file) ·
-`--msa` (an aligned FASTA)
+`--msa` (an alignment — aligned FASTA, A3M from ColabFold/HHblits, Clustal or Stockholm;
+`--msa tube=tube.a3m,belt=belt.fasta` for several proteins. The first sequence is the
+reference; it is aligned to the modelled sequence, so a full-length reference is fine.
+Grades are entropy-based, not ConSurf. Without an alignment the footprints simply have no
+conservation track)
 
 **`04_pisa_concordance.py PDBID`** — optional cross-check of the buried areas against
 PISA at the PDBe. `--pisa-json FILE` uses a file you downloaded yourself.
@@ -218,8 +222,8 @@ sandbox gets exactly the same numbers as a workstation.
 
 Python ≥ 3.9 with Biopython, NumPy, pandas, SciPy, matplotlib, pydssp and scikit-image
 (`pip install -r requirements.txt`). No compiled extensions, no external programs. A
-30-chain, 4,600-residue model takes a few minutes; `--shape` is the expensive option and
-is threaded.
+30-chain, 4,600-residue model takes a few minutes; shape complementarity (on by default,
+`--no-shape` to skip) is the expensive part and is threaded.
 
 ## Licence
 
