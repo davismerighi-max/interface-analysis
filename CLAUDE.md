@@ -22,7 +22,13 @@ python 01_interface_analysis.py MODEL.cif --resolution 3.2 [--proteins proteins.
 python 02_derive_tables.py      MODEL.cif
 python 03_make_figures.py       MODEL.cif
 python 05_assemblies.py         MODEL.cif --render
+python 06_organise_results.py   MODEL.cif          # MODEL_results/, one folder per figure
 ```
+
+- Run each model in ITS OWN working folder (the scripts can be called by path from the
+  repository). Never analyse two models in one folder: per-protein figure names differ
+  between runs, so old figures would sit next to new ones. Point the user to
+  `MODEL_results/` (made by step 06), not the working folder, when handing results over.
 
 - Ask for (or look up) the map/data resolution and pass `--resolution`. Without it every
   bond is reported as tentative.
