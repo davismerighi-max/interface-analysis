@@ -278,7 +278,7 @@ def grades_from_msa(path):
     The two correlate well but are not interchangeable, and the grades here must not be
     reported as ConSurf grades.
     """
-    seqs = read_fasta(path)
+    seqs = path if isinstance(path, list) else read_fasta(path)
     if len(seqs) < 2:
         print(f'  --msa: {path} holds fewer than 2 sequences; skipping', flush=True)
         return None
@@ -372,7 +372,11 @@ def _map_reference(ref, mseq):
     al.mode = 'global'
     al.substitution_matrix = substitution_matrices.load('BLOSUM62')
     al.open_gap_score, al.extend_gap_score = -10, -0.5
-    al.target_end_gap_score = al.query_end_gap_score = 0.0
+    try:                                   # Biopython >= 1.85 names
+        al.end_insertion_score = 0.0
+        al.end_deletion_score = 0.0
+    except AttributeError:                 # older Biopython
+        al.target_end_gap_score = al.query_end_gap_score = 0.0
     clean = lambda s: ''.join(c if c in 'ACDEFGHIKLMNPQRSTVWY' else 'X' for c in s.upper())
     a = al.align(clean(ref), clean(mseq))[0]
     mp, same = {}, 0
@@ -409,9 +413,7 @@ def apply_msa(spec):
             if len(seqs) < 2 or len({len(s) for _, s in seqs}) > 1:
                 bad.append(f'{os.path.basename(path)}: not an alignment of >= 2 sequences '
                            'of equal length'); continue
-            tmp = path + '.aligned.fasta'
-            open(tmp, 'w').write(''.join(f'>{n}\n{s}\n' for n, s in seqs))
-            gr = grades_from_msa(tmp)
+            gr = grades_from_msa(seqs)            # no temporary file in the folder
             if gr is None:
                 bad.append(f'{os.path.basename(path)}: could not be scored'); continue
             ref = ''.join(c for c in seqs[0][1] if c.upper() in 'ACDEFGHIKLMNPQRSTVWY')
