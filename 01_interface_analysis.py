@@ -190,11 +190,15 @@ def main():
     ap.add_argument('--names', default=None)
     ap.add_argument('--intra', action='store_true')
     ap.add_argument('--contact-cut', type=float, default=5.0)
-    ap.add_argument('--shape', action='store_true',
-                    help='also compute shape complementarity (Lawrence & Colman Sc) and gap '
-                         'volume (Laskowski) for every contacting pair. Adds a few minutes: '
-                         'each pair is meshed on a grid. Writes interface_shape.csv and adds '
-                         'sc / gap_index columns to interfaces_summary.csv.')
+    ap.add_argument('--no-shape', dest='shape', action='store_false',
+                    help='skip shape complementarity (Lawrence & Colman Sc) and gap volume '
+                         '(Laskowski). They are computed by default for every contacting '
+                         'pair: about a minute for a dimer, ten minutes or more for ~30 '
+                         'chains. Results go to interface_shape.csv and the sc / gap_index '
+                         'columns of interfaces_summary.csv.')
+    ap.add_argument('--shape', dest='shape', action='store_true',
+                    help=argparse.SUPPRESS)          # kept so older commands still work
+    ap.set_defaults(shape=True)
     ap.add_argument('--shape-spacing', type=float, default=0.5, metavar='A',
                     help='grid step for the shape calculation (default 0.5 A). Finer grids '
                          'lower Sc slightly (0.58 at 0.6 A to 0.52 at 0.35 A on one test '
@@ -668,7 +672,7 @@ def main():
         if args.shape:
             import interface_shape as ish
             if not ish.HAVE_SKIMAGE:
-                log('WARNING: scikit-image is not installed, skipping --shape')
+                log('WARNING: scikit-image is not installed, skipping shape complementarity')
                 RPT.warn('shape complementarity', 'scikit-image not installed; Sc skipped')
             else:
                 import concurrent.futures as _cf
@@ -711,7 +715,7 @@ def main():
                       f'Sc for {ok} of {len(SH)} pairs, median {SH.sc.median():.3f}')
 
     if not args.shape:
-        RPT.skip('shape complementarity', 'not requested (--shape)')
+        RPT.skip('shape complementarity', 'switched off (--no-shape)')
     SUMM.to_csv('interfaces_summary.csv', index=False)
     pd.DataFrame(allres).to_csv('interface_residues.csv', index=False)
 
