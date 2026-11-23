@@ -18,7 +18,7 @@ All steps run in ONE working directory, in order, on the same model file:
 
 ```bash
 pip install -r requirements.txt
-python 01_interface_analysis.py MODEL.cif --resolution 3.2 --shape [--proteins proteins.fasta]
+python 01_interface_analysis.py MODEL.cif --resolution 3.2 [--proteins proteins.fasta]
 python 02_derive_tables.py      MODEL.cif
 python 03_make_figures.py       MODEL.cif
 python 05_assemblies.py         MODEL.cif --render
@@ -26,8 +26,9 @@ python 05_assemblies.py         MODEL.cif --render
 
 - Ask for (or look up) the map/data resolution and pass `--resolution`. Without it every
   bond is reported as tentative.
-- `--shape` (shape complementarity) is the slow part: about a minute for a dimer, ten
-  minutes or more for 30+ chains. Offer to leave it out for a first look.
+- Shape complementarity runs by default and is the slow part: about a minute for a dimer,
+  ten minutes or more for 30+ chains. Offer `--no-shape` for a first look; the packing
+  figure is then skipped.
 - `--proteins FASTA` names and colours the proteins. Headers are `>name_#RRGGBB` (colour
   optional); records are matched to the model BY SEQUENCE, so order does not matter and
   extra records are harmless. If the user gives names and colours in conversation,
