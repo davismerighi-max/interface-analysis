@@ -213,16 +213,43 @@ def main():
                          'but flagged is_additive in ligands.csv so you can '
                          'filter them.')
     ap.add_argument('--sasa-points', type=int, default=100)
+    ap.add_argument('--proteins', default=None, metavar='FASTA',
+                    help='names and colours of the proteins: a FASTA whose headers are '
+                         '"name_#RRGGBB" (colour optional). Matched to the model by '
+                         'sequence; anything that does not match runs with defaults.')
     args = ap.parse_args()
 
     global LOG
     LOG = open('analysis.log', 'w', buffering=1)
     t_start = time.time()
+    import runlog
+    for _f in ('run_report.json', 'run_report.txt', 'run_errors.log'):
+        if os.path.exists(_f):          # step 01 starts a fresh report for a fresh run
+            os.remove(_f)
+    RPT = runlog.Report('01', model=args.model)
 
-    model, hyd, renumbered, metals, ligands = load_model(
-        args.model, keep_ligands=not args.no_ligands,
-        min_ligand_atoms=args.min_ligand_atoms)
+    with RPT.guard('read model', ok_detail=None, fatal=True):
+        if not os.path.exists(args.model):
+            raise FileNotFoundError(f'{args.model} not found in {os.getcwd()}')
+        model, hyd, renumbered, metals, ligands = load_model(
+            args.model, keep_ligands=not args.no_ligands,
+            min_ligand_atoms=args.min_ligand_atoms)
+        if len(model) == 0:
+            raise ValueError('the file contains no chains with coordinates')
     chains = [c.id for c in model]
+    RPT.ok('read model', f'{len(chains)} chains, {sum(len(list(c)) for c in model)} residues, '
+                       f'{len(hyd)} hydrogens')
+    if len(chains) < 2:
+        RPT.warn('read model', 'only ONE chain in the file: there is no inter-chain interface '
+                             'to measure. If this is a crystal entry, download its biological '
+                             'assembly instead.')
+    RPT.add('hydrogens', 'ok' if hyd else 'WARNING',
+          'present: H-bonds use distance + angle' if hyd else
+          'none in the model: H-bonds use distance only, which over-counts')
+    if args.resolution is None:
+        RPT.warn('resolution', 'not given (--resolution): bonds are reported as tentative')
+    else:
+        RPT.ok('resolution', f'{args.resolution:g} Å')
     log(f'model {os.path.basename(args.model)}: {len(chains)} chains, '
         f'{sum(len(list(c)) for c in model)} residues, {len(hyd)} hydrogens (kept for H-bond geometry)')
     if renumbered:
@@ -236,11 +263,58 @@ def main():
     # ---------------------------------------------------------------- entities
     seqs = sym.chain_sequences(model, T31)
     ent_of, reps = sym.group_entities(seqs)
-    names = (args.names.split(',') if args.names else
-             [f'entity_{i+1}' for i in range(len(reps))])
-    if len(names) != len(reps):
-        log(f'WARNING: {len(names)} names given for {len(reps)} entities; using defaults')
-        names = [f'entity_{i+1}' for i in range(len(reps))]
+    names = [f'entity_{i+1}' for i in range(len(reps))]
+    colours = {}
+    if args.names:
+        given = [x.strip() for x in args.names.split(',') if x.strip()]
+        if len(given) == len(reps):
+            names = given
+            RPT.ok('protein names (--names)', ', '.join(names))
+        else:
+            log(f'WARNING: {len(given)} names given for {len(reps)} entities; using defaults')
+            RPT.default('protein names (--names)',
+                      f'{len(given)} names given for {len(reps)} proteins found; '
+                      f'ran with {", ".join(names)}')
+    if args.proteins:
+        with RPT.guard('protein details (FASTA)', ok_detail=None):
+            import proteins as prot_io
+            recs = prot_io.read_proteins(args.proteins)
+            if not recs:
+                raise ValueError(f'{args.proteins} contains no FASTA records')
+            hits = prot_io.match_entities(reps, recs)
+            notes, n_hit, used = [], 0, {}
+            for i, (rec, cov, note) in enumerate(hits):
+                if rec is None:
+                    notes.append(f'{names[i]}: {note}, kept default name and colour')
+                    continue
+                if rec['name'] in used:
+                    notes.append(f'{names[i]}: also matches "{rec["name"]}", already used by '
+                                 f'{used[rec["name"]]}; kept default name')
+                    continue
+                used[rec['name']] = names[i]
+                names[i] = rec['name']; n_hit += 1
+                if rec['colour']:
+                    colours[rec['name']] = rec['colour']
+                notes += [f'{rec["name"]}: {p}' for p in rec['problems']]
+            unused = [r['name'] for r in recs if r['name'] not in used]
+            if unused:
+                notes.append('in the FASTA but not in the model: ' + ', '.join(unused))
+            summary = (f'{n_hit} of {len(reps)} protein(s) matched by sequence'
+                       + (f'; colours set for {len(colours)}' if colours else ''))
+            for nline in notes:
+                log('  proteins: ' + nline)
+            serious = [x for x in notes if not x.startswith('in the FASTA but not')]
+            if n_hit == len([r for r in reps if r[1] != 'ligand']) and not serious:
+                RPT.ok('protein details (FASTA)', summary + ': ' + ', '.join(names)
+                     + ('' if not notes else ' (' + '; '.join(notes) + ')'))
+            elif n_hit:
+                RPT.warn('protein details (FASTA)', summary + '. ' + '; '.join(notes))
+            else:
+                RPT.default('protein details (FASTA)', 'nothing matched, ran with default '
+                          'names and colours. ' + '; '.join(notes))
+    elif not args.names:
+        RPT.default('protein details', 'no --proteins FASTA or --names given; proteins are '
+                  'called ' + ', '.join(names))
     kinds = [k for _, k in reps]
     has_nucleic = any(k == 'nucleic' for k in kinds)
     for i, (s, k) in enumerate(reps):
@@ -279,8 +353,18 @@ def main():
             ca[c.id] = d
     cen = {c.id: np.mean([a.coord for r in c for a in r], axis=0) for c in model}
     centre = np.mean(list(cen.values()), axis=0)
-    ops = sym.find_symmetry_operators(ca, cen, ent_of)
-    grp = sym.classify(ops, centre=centre)
+    try:
+        ops = sym.find_symmetry_operators(ca, cen, ent_of)
+        grp = sym.classify(ops, centre=centre)
+        RPT.ok('symmetry search', f'{grp["point_group"]}, order {grp["order"]}')
+    except Exception as exc:
+        # Without symmetry the analysis still works: every chain becomes its own
+        # environment and every interface its own orbit. Slower to read, not wrong.
+        RPT.fail('symmetry search', exc, sys.exc_info()[2])
+        RPT.warn('symmetry fallback', 'treated as C1 (no symmetry): every chain and every '
+               'interface is reported separately')
+        ops = [(np.eye(3), np.zeros(3), {c: c for c in chains})]
+        grp = sym.classify(ops, centre=centre)
     corb = sym.chain_orbits(ops, chains)
     env_of = {c: ''.join(corb[c]) for c in chains}
     log(f'point group {grp["point_group"]} (order {grp["order"]}); '
@@ -344,78 +428,86 @@ def main():
     # a symmetric pair is bonded and another is not, that is a model inconsistency
     # worth resolving before publication.
     links = []
-    ani, rni, rii = A.an.to_numpy(), A.rn.to_numpy(), A.ri.to_numpy()
-    heavy = np.where(A.el.to_numpy() != 'H')[0]
+    with RPT.guard('covalent and metal links', ok_detail=None):
+        links = []
+        ani, rni, rii = A.an.to_numpy(), A.rn.to_numpy(), A.ri.to_numpy()
+        heavy = np.where(A.el.to_numpy() != 'H')[0]
 
-    sgi = np.where((rni == 'CYS') & (ani == 'SG'))[0]
-    if len(sgi) > 1:
-        kt = cKDTree(XYZ[sgi])
-        for si, sj in kt.query_pairs(4.5):
-            a, b = sgi[si], sgi[sj]
-            if chv[a] == chv[b]:
-                continue
-            d = float(np.linalg.norm(XYZ[a] - XYZ[b]))
-            links.append(dict(kind='disulfide', bonded=bool(d <= 2.5), distance=round(d, 2),
-                              c1=chv[a], resi1=int(rii[a]), resn1='CYS', atom1='SG',
-                              c2=chv[b], resi2=int(rii[b]), resn2='CYS', atom2='SG'))
-
-    don = np.where((rni == 'LYS') & (ani == 'NZ'))[0]
-    acc = np.where(((rni == 'ASN') & (ani == 'CG')) | ((rni == 'ASP') & (ani == 'CG')) |
-                   ((rni == 'GLN') & (ani == 'CD')) | ((rni == 'GLU') & (ani == 'CD')))[0]
-    if len(don) and len(acc):
-        kt = cKDTree(XYZ[acc])
-        for di in don:
-            for dj in kt.query_ball_point(XYZ[di], 1.8):
-                b = acc[dj]
-                if chv[di] == chv[b]:
+        sgi = np.where((rni == 'CYS') & (ani == 'SG'))[0]
+        if len(sgi) > 1:
+            kt = cKDTree(XYZ[sgi])
+            for si, sj in kt.query_pairs(4.5):
+                a, b = sgi[si], sgi[sj]
+                if chv[a] == chv[b]:
                     continue
-                links.append(dict(kind='isopeptide', bonded=True,
-                                  distance=round(float(np.linalg.norm(XYZ[di] - XYZ[b])), 2),
-                                  c1=chv[di], resi1=int(rii[di]), resn1='LYS', atom1='NZ',
-                                  c2=chv[b], resi2=int(rii[b]), resn2=rni[b], atom2=ani[b]))
+                d = float(np.linalg.norm(XYZ[a] - XYZ[b]))
+                links.append(dict(kind='disulfide', bonded=bool(d <= 2.5), distance=round(d, 2),
+                                  c1=chv[a], resi1=int(rii[a]), resn1='CYS', atom1='SG',
+                                  c2=chv[b], resi2=int(rii[b]), resn2='CYS', atom2='SG'))
 
-    for mch, mri, mnm, mxyz in metals:
-        near = tree.query_ball_point(mxyz, 3.0)
-        coord = [mk for mk in near if A.el.to_numpy()[mk] in ('N', 'O', 'S')]
-        by_ch = sorted({chv[mk] for mk in coord})
-        if len(by_ch) >= 2:
-            for mk in coord:
-                links.append(dict(kind=f'metal bridge ({mnm})', bonded=True,
-                                  distance=round(float(np.linalg.norm(XYZ[mk] - mxyz)), 2),
-                                  c1=f'{mnm}{mri}', resi1=int(mri), resn1=mnm, atom1=mnm,
-                                  c2=chv[mk], resi2=int(rii[mk]), resn2=rni[mk], atom2=ani[mk]))
+        don = np.where((rni == 'LYS') & (ani == 'NZ'))[0]
+        acc = np.where(((rni == 'ASN') & (ani == 'CG')) | ((rni == 'ASP') & (ani == 'CG')) |
+                       ((rni == 'GLN') & (ani == 'CD')) | ((rni == 'GLU') & (ani == 'CD')))[0]
+        if len(don) and len(acc):
+            kt = cKDTree(XYZ[acc])
+            for di in don:
+                for dj in kt.query_ball_point(XYZ[di], 1.8):
+                    b = acc[dj]
+                    if chv[di] == chv[b]:
+                        continue
+                    links.append(dict(kind='isopeptide', bonded=True,
+                                      distance=round(float(np.linalg.norm(XYZ[di] - XYZ[b])), 2),
+                                      c1=chv[di], resi1=int(rii[di]), resn1='LYS', atom1='NZ',
+                                      c2=chv[b], resi2=int(rii[b]), resn2=rni[b], atom2=ani[b]))
 
-    known = {(l['c1'], l['resi1'], l['c2'], l['resi2']) for l in links}
-    for li, lj in tree.query_pairs(r=2.0, output_type='ndarray'):
-        if chv[li] == chv[lj] or A.el.to_numpy()[li] == 'H' or A.el.to_numpy()[lj] == 'H':
-            continue
-        if (chv[li], int(rii[li]), chv[lj], int(rii[lj])) in known:
-            continue
-        links.append(dict(kind='unassigned short contact', bonded=False,
-                          distance=round(float(np.linalg.norm(XYZ[li] - XYZ[lj])), 2),
-                          c1=chv[li], resi1=int(rii[li]), resn1=rni[li], atom1=ani[li],
-                          c2=chv[lj], resi2=int(rii[lj]), resn2=rni[lj], atom2=ani[lj]))
+        for mch, mri, mnm, mxyz in metals:
+            near = tree.query_ball_point(mxyz, 3.0)
+            coord = [mk for mk in near if A.el.to_numpy()[mk] in ('N', 'O', 'S')]
+            by_ch = sorted({chv[mk] for mk in coord})
+            if len(by_ch) >= 2:
+                for mk in coord:
+                    links.append(dict(kind=f'metal bridge ({mnm})', bonded=True,
+                                      distance=round(float(np.linalg.norm(XYZ[mk] - mxyz)), 2),
+                                      c1=f'{mnm}{mri}', resi1=int(mri), resn1=mnm, atom1=mnm,
+                                      c2=chv[mk], resi2=int(rii[mk]), resn2=rni[mk], atom2=ani[mk]))
 
-    if links:
-        LK = pd.DataFrame(links).sort_values(['kind', 'distance'])
-        LK.to_csv('interface_links.csv', index=False)
-        for lk_kind, lk_g in LK.groupby('kind'):
-            lk_nb = int(lk_g.bonded.sum())
-            log(f'  {lk_kind}: {len(lk_g)} inter-chain, {lk_nb} within bonding distance')
-        lk_ss = LK[LK.kind == 'disulfide']
-        if len(lk_ss) and 0 < int(lk_ss.bonded.sum()) < len(lk_ss):
-            log('  NOTE: some CYS-CYS pairs are bonded and others of the same kind are not '
-                f'({lk_ss[lk_ss.bonded].distance.min():.2f}-{lk_ss[lk_ss.bonded].distance.max():.2f} A vs '
-                f'{lk_ss[~lk_ss.bonded].distance.min():.2f}-{lk_ss[~lk_ss.bonded].distance.max():.2f} A). '
-                'Either the cross-link is substoichiometric or the restraint was applied '
-                'unevenly across the symmetry copies — worth checking in the map.')
-        lk_nu = int((LK.kind == 'unassigned short contact').sum())
-        if lk_nu:
-            log(f'  {lk_nu} inter-chain heavy-atom pair(s) closer than 2.0 A with no assignable '
-                'bond — usually a mis-placed side chain, not chemistry. See interface_links.csv')
-    else:
-        log('  no disulfides, isopeptide links or bridging metals between chains')
+        known = {(l['c1'], l['resi1'], l['c2'], l['resi2']) for l in links}
+        for li, lj in tree.query_pairs(r=2.0, output_type='ndarray'):
+            if chv[li] == chv[lj] or A.el.to_numpy()[li] == 'H' or A.el.to_numpy()[lj] == 'H':
+                continue
+            if (chv[li], int(rii[li]), chv[lj], int(rii[lj])) in known:
+                continue
+            links.append(dict(kind='unassigned short contact', bonded=False,
+                              distance=round(float(np.linalg.norm(XYZ[li] - XYZ[lj])), 2),
+                              c1=chv[li], resi1=int(rii[li]), resn1=rni[li], atom1=ani[li],
+                              c2=chv[lj], resi2=int(rii[lj]), resn2=rni[lj], atom2=ani[lj]))
 
+        if links:
+            LK = pd.DataFrame(links).sort_values(['kind', 'distance'])
+            LK.to_csv('interface_links.csv', index=False)
+            for lk_kind, lk_g in LK.groupby('kind'):
+                lk_nb = int(lk_g.bonded.sum())
+                log(f'  {lk_kind}: {len(lk_g)} inter-chain, {lk_nb} within bonding distance')
+            lk_ss = LK[LK.kind == 'disulfide']
+            if len(lk_ss) and 0 < int(lk_ss.bonded.sum()) < len(lk_ss):
+                log('  NOTE: some CYS-CYS pairs are bonded and others of the same kind are not '
+                    f'({lk_ss[lk_ss.bonded].distance.min():.2f}-{lk_ss[lk_ss.bonded].distance.max():.2f} A vs '
+                    f'{lk_ss[~lk_ss.bonded].distance.min():.2f}-{lk_ss[~lk_ss.bonded].distance.max():.2f} A). '
+                    'Either the cross-link is substoichiometric or the restraint was applied '
+                    'unevenly across the symmetry copies — worth checking in the map.')
+            lk_nu = int((LK.kind == 'unassigned short contact').sum())
+            if lk_nu:
+                log(f'  {lk_nu} inter-chain heavy-atom pair(s) closer than 2.0 A with no assignable '
+                    'bond — usually a mis-placed side chain, not chemistry. See interface_links.csv')
+        else:
+            log('  no disulfides, isopeptide links or bridging metals between chains')
+
+    if not RPT._has('covalent and metal links'):
+        _ss = sum(1 for l in links if l.get('kind') == 'disulfide' and l.get('bonded'))
+        _ot = sum(1 for l in links if l.get('kind') != 'disulfide' and l.get('bonded'))
+        RPT.ok('covalent and metal links',
+             f'{_ss} bonded inter-chain disulfide(s), {_ot} other link(s)'
+             if (_ss or _ot) else 'none between chains')
     # ---------------------------------------------------------------- SASA
     sr = ShrakeRupley(probe_radius=1.40, n_points=args.sasa_points)
 
@@ -543,8 +635,14 @@ def main():
         return summ, rows, hb, sb, phob_pairs
 
     summaries, allres, bondrows, phobrows = [], [], [], []
+    bad_pairs = []
     for n, (c1, c2) in enumerate(pairs):
-        s, rows, hb, sb, pp = analyse(c1, c2)
+        try:
+            s, rows, hb, sb, pp = analyse(c1, c2)
+        except Exception as exc:              # one bad pair must not cost the whole run
+            bad_pairs.append(f'{c1}-{c2}')
+            RPT.fail(f'interface {c1}-{c2}', exc, sys.exc_info()[2])
+            continue
         summaries.append(s); allres += rows
         for (ri1, rn1, ri2, rn2), k in pp.items():
             phobrows.append(dict(c1=c1, c2=c2, ri1=ri1, rn1=rn1, ri2=ri2, rn2=rn2,
@@ -556,53 +654,64 @@ def main():
         if (n + 1) % 25 == 0 or n + 1 == len(pairs):
             log(f'  pair {n+1}/{len(pairs)}  {time.time()-t_start:.0f}s')
     SUMM = pd.DataFrame(summaries)
+    if not len(SUMM):
+        raise RuntimeError('no interface could be measured')
+    RPT.add('buried surface and bonds', 'WARNING' if bad_pairs else 'ok',
+          f'{len(SUMM)} of {len(pairs)} contacting pairs measured'
+          + (f'; failed: {", ".join(bad_pairs)}' if bad_pairs else ''))
 
     # ---------------------------------------------------- shape complementarity / gaps
     # Area says how much surface is buried; Sc and the gap index say how WELL the two
     # surfaces fit. A large interface with a low Sc and a high gap index is a loose
     # contact, which is a different structural claim from a small tight one.
-    if args.shape:
-        import interface_shape as ish
-        if not ish.HAVE_SKIMAGE:
-            log('WARNING: scikit-image is not installed, skipping --shape')
-        else:
-            import concurrent.futures as _cf
-            RAD = {'C': 1.70, 'N': 1.55, 'O': 1.52, 'S': 1.80, 'P': 1.80,
-                   'SE': 1.90, 'F': 1.47}
-            def _cr(c):
-                a = by_chain[c]
-                return (a[['x', 'y', 'z']].to_numpy(),
-                        np.array([RAD.get(str(e).upper(), 1.80) for e in a.el]))
-            amap = {(r['c1'], r['c2']): r['area'] for r in summaries}
-            jobs = [((c1, c2), *_cr(c1), *_cr(c2), amap.get((c1, c2)),
-                     args.shape_spacing) for c1, c2 in pairs]
-            nw = args.shape_workers or max(1, (os.cpu_count() or 2) // 2)
-            # Threads, not processes: the heavy steps (distance transform, marching
-            # cubes, KD-tree queries) are compiled and release the GIL, and process
-            # pools are not always permitted to spawn (sandboxes, some schedulers).
-            log(f'shape complementarity and gap volume for {len(jobs)} pairs '
-                f'on {nw} threads ...')
-            res, t0 = {}, time.time()
-            try:
-                with _cf.ThreadPoolExecutor(max_workers=nw) as ex:
-                    for n, (key, out) in enumerate(ex.map(ish._worker, jobs)):
-                        res[key] = out
-                        if (n + 1) % 25 == 0 or n + 1 == len(jobs):
-                            log(f'  shape {n+1}/{len(jobs)}  {time.time()-t0:.0f}s')
-            except Exception as exc:                      # fall back to one thread
-                log(f'  thread pool failed ({exc}); running serially')
-                for n, j in enumerate(jobs):
-                    key, out = ish._worker(j); res[key] = out
-            SH = pd.DataFrame([dict(c1=k[0], c2=k[1], **{kk: vv for kk, vv in v.items()
-                                                         if kk != 'error'})
-                               for k, v in res.items()])
-            SH.to_csv('interface_shape.csv', index=False)
-            SUMM = SUMM.merge(SH[['c1', 'c2', 'sc', 'gap_volume', 'gap_index']],
-                              on=['c1', 'c2'], how='left')
-            ok = SH.sc.notna().sum()
-            log(f'  Sc obtained for {ok}/{len(SH)} pairs '
-                f'(median {SH.sc.median():.3f}); see interface_shape.csv')
+    with RPT.guard('shape complementarity', ok_detail=None):
+        if args.shape:
+            import interface_shape as ish
+            if not ish.HAVE_SKIMAGE:
+                log('WARNING: scikit-image is not installed, skipping --shape')
+                RPT.warn('shape complementarity', 'scikit-image not installed; Sc skipped')
+            else:
+                import concurrent.futures as _cf
+                RAD = {'C': 1.70, 'N': 1.55, 'O': 1.52, 'S': 1.80, 'P': 1.80,
+                       'SE': 1.90, 'F': 1.47}
+                def _cr(c):
+                    a = by_chain[c]
+                    return (a[['x', 'y', 'z']].to_numpy(),
+                            np.array([RAD.get(str(e).upper(), 1.80) for e in a.el]))
+                amap = {(r['c1'], r['c2']): r['area'] for r in summaries}
+                jobs = [((c1, c2), *_cr(c1), *_cr(c2), amap.get((c1, c2)),
+                         args.shape_spacing) for c1, c2 in pairs]
+                nw = args.shape_workers or max(1, (os.cpu_count() or 2) // 2)
+                # Threads, not processes: the heavy steps (distance transform, marching
+                # cubes, KD-tree queries) are compiled and release the GIL, and process
+                # pools are not always permitted to spawn (sandboxes, some schedulers).
+                log(f'shape complementarity and gap volume for {len(jobs)} pairs '
+                    f'on {nw} threads ...')
+                res, t0 = {}, time.time()
+                try:
+                    with _cf.ThreadPoolExecutor(max_workers=nw) as ex:
+                        for n, (key, out) in enumerate(ex.map(ish._worker, jobs)):
+                            res[key] = out
+                            if (n + 1) % 25 == 0 or n + 1 == len(jobs):
+                                log(f'  shape {n+1}/{len(jobs)}  {time.time()-t0:.0f}s')
+                except Exception as exc:                      # fall back to one thread
+                    log(f'  thread pool failed ({exc}); running serially')
+                    for n, j in enumerate(jobs):
+                        key, out = ish._worker(j); res[key] = out
+                SH = pd.DataFrame([dict(c1=k[0], c2=k[1], **{kk: vv for kk, vv in v.items()
+                                                             if kk != 'error'})
+                                   for k, v in res.items()])
+                SH.to_csv('interface_shape.csv', index=False)
+                SUMM = SUMM.merge(SH[['c1', 'c2', 'sc', 'gap_volume', 'gap_index']],
+                                  on=['c1', 'c2'], how='left')
+                ok = SH.sc.notna().sum()
+                log(f'  Sc obtained for {ok}/{len(SH)} pairs '
+                    f'(median {SH.sc.median():.3f}); see interface_shape.csv')
+                RPT.add('shape complementarity', 'ok' if ok == len(SH) else 'WARNING',
+                      f'Sc for {ok} of {len(SH)} pairs, median {SH.sc.median():.3f}')
 
+    if not args.shape:
+        RPT.skip('shape complementarity', 'not requested (--shape)')
     SUMM.to_csv('interfaces_summary.csv', index=False)
     pd.DataFrame(allres).to_csv('interface_residues.csv', index=False)
 
@@ -610,26 +719,33 @@ def main():
     # Which chains does each bound ligand actually touch, and does it BRIDGE two of
     # them? A cofactor sitting in the seam is part of the interface, and this is the
     # table that says so.
+    with RPT.guard('ligands', ok_detail=None):
+        if ligands:
+            lig_key = {(lg['chain'], lg['resi']) for lg in ligands}
+            lrows = []
+            for r in allres:
+                if (r['chain'], r['resi']) in lig_key:
+                    partner = r['c2'] if r['chain'] == r['c1'] else r['c1']
+                    lrows.append(dict(chain=r['chain'], resi=r['resi'], resn=r['resn'],
+                                      partner_chain=partner, dsasa=r['dsasa'],
+                                      n_hbond=r['nhb'], n_saltbridge=r['nsb']))
+            LC = pd.DataFrame(lrows)
+            LC.to_csv('ligand_contacts.csv', index=False)
+            if len(LC):
+                npart = LC.groupby(['chain', 'resi', 'resn']).partner_chain.nunique()
+                br = npart[npart >= 2]
+                log(f'  {len(npart)} ligand(s) lie at an inter-chain interface'
+                    + (f'; {len(br)} BRIDGE two or more chains: '
+                       + ', '.join(f'{r[2]}{r[1]}({r[0]})' for r in br.index)
+                       if len(br) else ''))
+            else:
+                log('  no ligand lies at an inter-chain interface')
     if ligands:
-        lig_key = {(lg['chain'], lg['resi']) for lg in ligands}
-        lrows = []
-        for r in allres:
-            if (r['chain'], r['resi']) in lig_key:
-                partner = r['c2'] if r['chain'] == r['c1'] else r['c1']
-                lrows.append(dict(chain=r['chain'], resi=r['resi'], resn=r['resn'],
-                                  partner_chain=partner, dsasa=r['dsasa'],
-                                  n_hbond=r['nhb'], n_saltbridge=r['nsb']))
-        LC = pd.DataFrame(lrows)
-        LC.to_csv('ligand_contacts.csv', index=False)
-        if len(LC):
-            npart = LC.groupby(['chain', 'resi', 'resn']).partner_chain.nunique()
-            br = npart[npart >= 2]
-            log(f'  {len(npart)} ligand(s) lie at an inter-chain interface'
-                + (f'; {len(br)} BRIDGE two or more chains: '
-                   + ', '.join(f'{r[2]}{r[1]}({r[0]})' for r in br.index)
-                   if len(br) else ''))
-        else:
-            log('  no ligand lies at an inter-chain interface')
+        if not RPT._has('ligands'):
+            RPT.ok('ligands', f'{len(ligands)} kept: '
+                 + ', '.join(sorted({lg["resn"] for lg in ligands})))
+    else:
+        RPT.skip('ligands', 'none in the model' if not args.no_ligands else '--no-ligands')
     pd.DataFrame(bondrows).to_csv('interface_bonds.csv', index=False)
     pd.DataFrame(phobrows).to_csv('interface_hydrophobic.csv', index=False)
 
@@ -656,7 +772,8 @@ def main():
                intra_monomer=bool(args.intra), hydrogens_present=bool(hyd),
                renumbered=bool(renumbered),
                hbond_criterion=('distance+angle' if hyd else 'distance only (no H in model)'),
-               dg_model='Eisenberg-McLachlan 1986 atomic solvation parameters')
+               dg_model='Eisenberg-McLachlan 1986 atomic solvation parameters',
+               colours=colours, proteins_fasta=args.proteins)
     json.dump(cfg, open('run_config.json', 'w'), indent=1)
     if conf in ('low', 'unknown'):
         log(f'NOTE: bond confidence "{conf}" — downstream steps will flag individual '
@@ -665,6 +782,9 @@ def main():
         log(f'NOTE: {cfg["single_copy_orbits"]} interface(s) have only ONE copy in this '
             'assembly, so they carry no symmetry-replicate error estimate.')
     log(f'DONE in {time.time()-t_start:.0f}s')
+    RPT.ok('interface inventory', f'{len(pairs)} contacting pairs, {len(uniq)} symmetry-unique '
+                                f'interfaces, {len(chains)} chains')
+    RPT.done()
 
 
 if __name__ == '__main__':
