@@ -20,12 +20,33 @@ FAILED (that part did not run; the rest of the step carried on).
     R.add('protein details', 'DEFAULT', 'no FASTA given')
     R.done()
 """
-import json, os, sys, time, traceback
+import atexit, json, os, sys, time, traceback
 
 STEPS = {'01': 'interface analysis', '02': 'tables and statistics', '03': 'figures',
-         '04': 'PISA concordance', '05': 'assemblies'}
+         '04': 'PISA concordance', '05': 'assemblies', '06': 'organise results'}
 ORDER = ['ok', 'SKIPPED', 'WARNING', 'DEFAULT', 'FAILED']
 _JSON, _TXT, _ERR = 'run_report.json', 'run_report.txt', 'run_errors.log'
+MANIFEST = 'run_manifest.json'
+
+
+def _snapshot():
+    """{file name: modification time} for the files in the working folder."""
+    out = {}
+    for f in os.listdir('.'):
+        try:
+            if os.path.isfile(f):
+                out[f] = os.path.getmtime(f)
+        except OSError:
+            pass
+    return out
+
+
+def read_manifest():
+    """{step: [files written by that step]} from the last run in this folder."""
+    try:
+        return json.load(open(MANIFEST, encoding='utf-8'))
+    except Exception:
+        return {}
 
 
 class Skip(Exception):
@@ -72,6 +93,16 @@ class Report:
                                started=time.strftime('%Y-%m-%d %H:%M:%S'),
                                finished=None, seconds=None)
         self._write()
+        if step == '01':
+            # a new run: start a new list of produced files. Files of an earlier run stay
+            # on disk but are no longer counted as part of this run, so step 06 never
+            # sweeps them into the results.
+            try:
+                json.dump({}, open(MANIFEST, 'w', encoding='utf-8'))
+            except Exception:
+                pass
+        self._before = _snapshot()
+        atexit.register(self.record_outputs)       # also after a crash or sys.exit
         self._hook = sys.excepthook
         sys.excepthook = self._crash
 
@@ -117,11 +148,26 @@ class Report:
         """Context manager: record success, or record the failure and carry on."""
         return _Guard(self, item, ok_detail, fatal)
 
+    def record_outputs(self):
+        """Add the files this step created or changed to run_manifest.json."""
+        try:
+            now = _snapshot()
+            new = sorted(f for f, t in now.items()
+                         if f not in self._before or t > self._before[f])
+            man = read_manifest()
+            man[self.step] = sorted(set(man.get(self.step, [])) | set(new))
+            tmp = MANIFEST + '.tmp'
+            json.dump(man, open(tmp, 'w', encoding='utf-8'), indent=1)
+            os.replace(tmp, MANIFEST)
+        except Exception:
+            pass                                   # bookkeeping must never stop a run
+
     def done(self):
         d = self.data[self.step]
         d['finished'] = time.strftime('%Y-%m-%d %H:%M:%S')
         d['seconds'] = round(time.time() - self.t0, 1)
         self._write()
+        self.record_outputs()
         sys.excepthook = self._hook
         n = {s: sum(1 for i in d['items'] if i['status'] == s) for s in ORDER}
         bad = n['FAILED'] + n['DEFAULT'] + n['WARNING']
