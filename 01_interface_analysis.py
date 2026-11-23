@@ -788,6 +788,27 @@ def main():
     log(f'DONE in {time.time()-t_start:.0f}s')
     RPT.ok('interface inventory', f'{len(pairs)} contacting pairs, {len(uniq)} symmetry-unique '
                                 f'interfaces, {len(chains)} chains')
+    # Tables that are written only when there is something to put in them. If this model
+    # has none, a copy left by an EARLIER model in the same folder would otherwise be read
+    # by the later steps as if it belonged to this one (another model's disulfides in the
+    # assembly verdicts, its ligands in the tables). Rewrite each as an empty table.
+    _OPTIONAL = {'ligands.csv': 'chain,resi,resn,n_atoms,is_additive',
+                 'ligand_contacts.csv': 'chain,resi,resn,partner_chain,dsasa,n_hbond,'
+                                        'n_saltbridge',
+                 'interface_links.csv': 'kind,bonded,distance,c1,resi1,resn1,atom1,c2,resi2,'
+                                        'resn2,atom2',
+                 'interface_shape.csv': 'c1,c2,sc,sc_n_dots,gap_volume,gap_index',
+                 'residue_intra_burial.csv': 'chain,entity_name,resi,resn,'
+                                             'sasa_in_folded_chain,max_asa,intra_buried,rsa',
+                 'residue_renumbering.csv': 'chain,new_resi,orig_resseq,icode,resn'}
+    _stale = [f for f in _OPTIONAL
+              if os.path.exists(f) and os.path.getmtime(f) < t_start - 1]
+    for f in _stale:
+        with open(f, 'w', encoding='utf-8') as fh:
+            fh.write(_OPTIONAL[f] + '\n')
+    if _stale:
+        RPT.ok('tables of an earlier run', f'emptied {len(_stale)} left in this folder by a '
+                                           f'previous model: {", ".join(_stale)}')
     RPT.done()
 
 
