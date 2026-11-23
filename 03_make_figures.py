@@ -328,10 +328,70 @@ def grades_from_msa(path):
     return list(gr)
 
 
+def read_alignment(path):
+    """[(name, aligned sequence)] from aligned FASTA, A3M, Clustal or Stockholm.
+
+    A3M (ColabFold, HHblits) marks insertions relative to the query in lower case; those
+    are dropped so every row has the query's columns. Clustal and Stockholm are read with
+    Bio.AlignIO when the file does not look like FASTA."""
+    head = open(path, encoding='utf-8', errors='replace').read(2000).lstrip()
+    if head.startswith('>'):
+        seqs = [(n, s) for n, s in read_fasta(path) if not n.startswith('#')]
+        if seqs and len({len(s) for _, s in seqs}) > 1 and any(
+                c.islower() for _, s in seqs[1:] for c in s):
+            seqs = [(n, ''.join(c for c in s if not c.islower() and c != '.'))
+                    for n, s in seqs]
+        return seqs
+    from Bio import AlignIO
+    for fmt in ('stockholm', 'clustal', 'phylip-relaxed'):
+        try:
+            aln = AlignIO.read(path, fmt)
+            return [(r.id, str(r.seq)) for r in aln]
+        except Exception:
+            continue
+    return []
+
+
+def _model_seq(entity):
+    """(one-letter sequence, residue numbers) of the first chain of `entity`."""
+    from Bio.SeqUtils import seq1
+    ch = next((c for c in GEO.index if prot[c] == entity), None)
+    if ch is None:
+        return '', []
+    rs = [r for r in model[ch] if r.id[0] == ' ']
+    return ''.join(seq1(r.get_resname()) for r in rs), [r.id[1] for r in rs]
+
+
+def _map_reference(ref, mseq):
+    """{index in ref: index in mseq} from a global alignment with free end gaps, plus the
+    identity over aligned pairs. A full-length reference against a model with missing
+    termini or loops maps correctly instead of being shifted."""
+    from Bio import Align
+    from Bio.Align import substitution_matrices
+    al = Align.PairwiseAligner()
+    al.mode = 'global'
+    al.substitution_matrix = substitution_matrices.load('BLOSUM62')
+    al.open_gap_score, al.extend_gap_score = -10, -0.5
+    al.target_end_gap_score = al.query_end_gap_score = 0.0
+    clean = lambda s: ''.join(c if c in 'ACDEFGHIKLMNPQRSTVWY' else 'X' for c in s.upper())
+    a = al.align(clean(ref), clean(mseq))[0]
+    mp, same = {}, 0
+    for (r0, r1), (m0, m1) in zip(*a.aligned):
+        for k in range(r1 - r0):
+            mp[r0 + k] = m0 + k
+            same += ref[r0 + k].upper() == mseq[m0 + k]
+    return mp, (same / len(mp) if mp else 0.0)
+
+
 def apply_msa(spec):
-    """Map --msa grades onto residue numbers, per protein."""
+    """Map --msa grades onto residue numbers, per protein, through a sequence alignment."""
     out = {}
     if not spec:
+        if not args.conservation:
+            RPT.skip('conservation', 'no alignment given (--msa or --conservation): '
+                                     'footprints drawn without a conservation track')
+        else:
+            RPT.ok('conservation', f'from {os.path.basename(args.conservation)}')
         return out
     items = []
     for part in spec.split(','):
@@ -340,24 +400,53 @@ def apply_msa(spec):
             items.append((k.strip(), v.strip()))
         else:
             items.append((None, part.strip()))
+    notes, bad = [], []
     for pname, path in items:
-        gr = grades_from_msa(path)
-        if gr is None:
-            continue
-        resnums = {}
-        for e in ENTS:
-            ch = next((c for c in GEO.index if prot[c] == e), None)
-            if ch is not None:
-                resnums[e] = sorted(r.id[1] for r in model[ch])
-        target = pname if pname in ENTS else min(
-            resnums, key=lambda e: abs(len(resnums[e]) - len(gr)))
-        rn = resnums[target]
-        if len(rn) != len(gr):
-            n = min(len(rn), len(gr))
-            print(f'  --msa: reference has {len(gr)} residues but {target} has {len(rn)} in '
-                  f'the model; aligning the first {n} by order', flush=True)
-            rn, gr = rn[:n], gr[:n]
-        out[target] = {int(r): int(g) for r, g in zip(rn, gr)}
+        try:
+            if not os.path.exists(path):
+                bad.append(f'{path}: file not found'); continue
+            seqs = read_alignment(path)
+            if len(seqs) < 2 or len({len(s) for _, s in seqs}) > 1:
+                bad.append(f'{os.path.basename(path)}: not an alignment of >= 2 sequences '
+                           'of equal length'); continue
+            tmp = path + '.aligned.fasta'
+            open(tmp, 'w').write(''.join(f'>{n}\n{s}\n' for n, s in seqs))
+            gr = grades_from_msa(tmp)
+            if gr is None:
+                bad.append(f'{os.path.basename(path)}: could not be scored'); continue
+            ref = ''.join(c for c in seqs[0][1] if c.upper() in 'ACDEFGHIKLMNPQRSTVWY')
+            cands = [pname] if pname in ENTS else ENTS
+            best = None
+            for e in cands:
+                mseq, rn = _model_seq(e)
+                if not mseq:
+                    continue
+                mp, ident = _map_reference(ref, mseq)
+                cover = len(mp) / max(len(mseq), 1)
+                score = ident * cover
+                if best is None or score > best[0]:
+                    best = (score, e, mp, rn, ident, cover)
+            if best is None or best[4] < 0.30 or best[5] < 0.50:
+                why = (f'best match {best[1]} at {100*best[4]:.0f} % identity over '
+                       f'{100*best[5]:.0f} % of the model' if best else 'no protein to match')
+                bad.append(f'{os.path.basename(path)}: first sequence does not match the '
+                           f'model ({why})'); continue
+            _, e, mp, rn, ident, cover = best
+            if pname and pname not in ENTS:
+                notes.append(f'"{pname}" is not a protein name in this run; matched by '
+                             f'sequence to {e}')
+            out[e] = {int(rn[mp[k]]): int(gr[k]) for k in mp if k < len(gr)}
+            notes.append(f'{e}: {len(seqs)} sequences, {len(out[e])} residues graded '
+                         f'({100*ident:.0f} % identity to the model)')
+        except Exception as ex:
+            bad.append(f'{os.path.basename(path)}: {type(ex).__name__}: {ex}')
+    if out and not bad:
+        RPT.ok('conservation', '; '.join(notes) + ' — entropy grades, not ConSurf')
+    elif out:
+        RPT.warn('conservation', '; '.join(notes) + '. NOT used: ' + '; '.join(bad))
+    else:
+        RPT.fail('conservation', 'no alignment could be used, plotted without conservation: '
+                 + '; '.join(bad))
     return out
 
 
@@ -1164,7 +1253,7 @@ with RPT.guard('fig_packing', ok_detail='written'):
     SC_MAX = 0.75
 
     if not ('sc' in S.columns and S.sc.notna().any()):
-        RPT.skip('fig_packing', 'no shape complementarity in step 01 (run it with --shape)')
+        RPT.skip('fig_packing', 'no shape complementarity in step 01 (it was run with --no-shape)')
     if 'sc' in S.columns and S.sc.notna().any():
         SHP = S.dropna(subset=['sc'])
         off = args.sc_offset
