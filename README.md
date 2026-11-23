@@ -32,6 +32,8 @@ download a zip of every table and figure.*
 | **Energetics** | Eisenberg–McLachlan atomic solvation ΔG per interface, split into what the burial pays for and what it costs |
 | **Packing** | shape complementarity *S*<sub>c</sub> and gap index per interface (Lawrence & Colman), on a solvent-excluded surface |
 | **Ligands** | buried area, hydrogen bonds and salt bridges for every bound cofactor against each neighbouring chain — a ligand in a shared active site is found without being asked for |
+| **Assemblies** | which parts of the model could exist on their own: the model is taken apart weakest interface first, every piece is classified with a written reason, disulfides are tracked separately, and each candidate is saved as its own PDB |
+| **Run report** | `run_report.txt`: every part of every step marked ok / DEFAULT / WARNING / SKIPPED / FAILED with the reason, so a problem is found in seconds and one failed figure never stops the rest |
 | **Statistics** | the symmetry copies are used as genuine replicates; category comparisons come with non-parametric tests and effect sizes |
 | **Figures** | per-protein interface footprints, contact maps, interaction networks with bond lengths to scale, architecture, area partition, chemistry and packing panels |
 | **ChimeraX** | the model with buried area in the B-factor column, plus two ready-to-run `.cxc` command files |
@@ -54,10 +56,13 @@ pip install -r requirements.txt
 python 01_interface_analysis.py  MODEL.pdb  --resolution 2.6  --shape
 python 02_derive_tables.py       MODEL.pdb
 python 03_make_figures.py        MODEL.pdb
+python 05_assemblies.py          MODEL.pdb  --render
 ```
 
 That is the whole pipeline. Step 01 writes the measurements, step 02 derives the tables
-and the statistics report, step 03 draws the figures. Each step reads what the previous
+and the statistics report, step 03 draws the figures, step 05 proposes candidate
+assemblies. After any step, open `run_report.txt` to see what worked, what ran with
+defaults and what failed. Each step reads what the previous
 one left in the directory, so you can re-run step 03 with different figure options
 without repeating the expensive work.
 
@@ -65,21 +70,37 @@ without repeating the expensive work.
 cluster node. The only script that makes a request is the optional
 `04_pisa_concordance.py`, and even that accepts a pre-downloaded JSON instead.
 
-### Naming your chains
+### Naming and colouring your proteins
 
-```bash
-python 01_interface_analysis.py MODEL.pdb --names "D,E,F,G,H,I,J,K,L=tube; A,B,C=belt"
-python 03_make_figures.py       MODEL.pdb --colours "tube=#7FA8D4; belt=#E8884A"
+The simplest way is a FASTA file whose headers carry the name and, optionally, a colour:
+
+```
+>tube_#7FA8D4
+MSKLTRVENAL...
+>belt_#E8884A
+MAQ...
 ```
 
-Without `--names` the entities are called `protein_1`, `protein_2`, … in order of size.
+```bash
+python 01_interface_analysis.py MODEL.pdb --proteins proteins.fasta
+```
+
+Records are matched to the model **by sequence** (≥ 90 % of the modelled residues), so
+the order does not matter, the full-length sequence is fine even if loops are missing,
+and extra records are ignored. Anything that does not match runs with the defaults and
+is listed in `run_report.txt`. The colours carry through every later step.
+
+Alternatively, `--names tube,belt,fibre` names the proteins in order of first appearance
+in the file, and `03_make_figures.py --colours "tube=#7FA8D4,belt=#E8884A"` pins colours.
+Without either, proteins are called `entity_1`, `entity_2`, … Keep names short: they
+label every axis.
 
 ---
 
 ## Options
 
 **`01_interface_analysis.py`** — `--resolution` (quotes the map/data resolution in every
-report and sets the distance tolerances) · `--names` · `--contact-cut` (5.0 Å) ·
+report and sets the distance tolerances) · `--proteins FASTA` · `--names` · `--contact-cut` (5.0 Å) ·
 `--sasa-points` (100) · `--intra` (also analyse contacts within a chain) · `--shape`
 (shape complementarity and gap index; the slow part) · `--shape-spacing` (0.5 Å) ·
 `--shape-workers` · `--no-ligands` · `--min-ligand-atoms` (5)
@@ -93,6 +114,38 @@ report and sets the distance tolerances) · `--names` · `--contact-cut` (5.0 Å
 
 **`04_pisa_concordance.py PDBID`** — optional cross-check of the buried areas against
 PISA at the PDBe. `--pisa-json FILE` uses a file you downloaded yourself.
+
+Step 03 also draws two licorice renders of the whole model — `fig_render_budget`
+(each residue in the colour of the protein that buries it) and `fig_render_interactions`
+(the most specific interaction it makes) — for a quick 3D picture without ChimeraX.
+`--render-view 0,0` gives a side view; `--no-render` skips them.
+
+**`05_assemblies.py`** — `--render` (licorice figure of the main candidates) ·
+`--min-kept` (0.50) · `--strong-kept` (0.67) · `--min-area` · `--colours` · `--no-pdb`
+
+---
+
+## Candidate assemblies
+
+`05_assemblies.py` takes the model apart weakest interface first — always a whole
+symmetry orbit at a time — and classifies every piece that appears
+(`assembly_candidates.csv`, with a `reason` column written in words):
+
+| kept | class | meaning |
+|---|---|---|
+| ≥ 67 % | strong candidate | breaks less than half of what it keeps |
+| ≥ 50 % | candidate | keeps more than it breaks |
+| < 50 % | not supported by contacts alone | |
+| any | covalent unit | every chain joined by disulfides: survives non-reducing conditions |
+
+*kept* is the share of a piece's buried area that stays inside it. **These cut-offs
+are a stated heuristic, not a published standard** — PISA ranks assemblies by ΔG_diss,
+which needs an entropy term this pipeline does not model. Disulfides are never counted
+as area: interface orbits carrying one are not cut in a first, oxidising pass, and a
+piece whose boundary crosses a bonded disulfide is marked *separable only under
+reducing conditions*. For a cryo-EM particle there is no crystal lattice, so the
+question is whether a piece could exist on its own — something only experiment settles
+(SEC-MALS, mass photometry, non-reducing SDS-PAGE, 2D classes).
 
 ---
 
@@ -141,17 +194,23 @@ Two conventions that matter for symmetric assemblies:
 | **4HHB** haemoglobin | cofactors that are *not* at an interface (one haem grazes a partner at 1.2 Å²) |
 | **2TSC** thymidylate synthase | a cofactor that *is*: dUMP buries 34.3 Å² against the partner subunit with 4 H-bonds |
 | **3GRS** glutathione reductase | a single chain in the file — no interface, and it says so instead of failing |
+| **tail1** phage tail, cryo-EM 2.6 Å, C3, 30 chains | three proteins in ten environments; splits into tube and belt + fibre shell; disulfide-linked tube dimers |
 
 ---
 
 ## Running it with an AI assistant
 
+> **AI assistants: read [`CLAUDE.md`](CLAUDE.md) before running anything.** It explains
+> how to run the pipeline and how to explain every output to the user, topic by topic,
+> with the conventions and caveats that must accompany each number.
+
 The repository is written to be handed straight to a coding assistant (Claude Code,
-Claude Science, or any agent with a shell). Clone it, point the assistant at this README,
-and ask it to run the three steps on your model — every script prints its own `--help`,
-every output is a plain CSV with a header row, and the whole analysis is reproducible
-from `run_config.json`. Because nothing is fetched from the network, an assistant running
-inside a sandbox gets exactly the same numbers as a workstation.
+Claude Science, or any agent with a shell). Claude Code reads `CLAUDE.md` automatically
+when it opens the folder; with any other assistant, ask it to read that file first.
+Every script prints its own `--help`, every output is a plain CSV with a header row,
+`run_report.txt` says what worked, and the analysis is reproducible from
+`run_config.json`. Nothing is fetched from the network, so an assistant running inside a
+sandbox gets exactly the same numbers as a workstation.
 
 ---
 
