@@ -111,7 +111,7 @@ label every axis.
 ## Options
 
 **`01_interface_analysis.py`** — `--resolution` (quotes the map/data resolution in every
-report and sets the distance tolerances) · `--proteins FASTA` · `--names` · `--contact-cut` (5.0 Å) ·
+report and sets the distance tolerances; read from the file header when not given) · `--proteins FASTA` · `--names` · `--contact-cut` (5.0 Å) ·
 `--sasa-points` (100) · `--intra` (also analyse contacts within a chain) · `--no-shape`
 (skip shape complementarity and gap index, on by default; the slow part) · `--shape-spacing` (0.5 Å) ·
 `--shape-workers` · `--no-ligands` · `--min-ligand-atoms` (5)
@@ -119,7 +119,8 @@ report and sets the distance tolerances) · `--proteins FASTA` · `--names` · `
 **`02_derive_tables.py`** — no options; it reads the settings back from `run_config.json`.
 
 **`03_make_figures.py`** — `--per-line` (350 residues) · `--colours` · `--bsa-min` ·
-`--solvation-track` · `--no-interaction-track` · `--network-min` · `--phobic-min` ·
+`--solvation-track` · `--no-interaction-track` · `--network-min` · `--phobic-min` (apolar atom contacts a residue pair needs to count as a
+hydrophobic contact in the footprints, networks, renders and ChimeraX script; default 3) ·
 `--network-per-page` · `--sc-offset` · `--conservation` (a ConSurf `.grades` file) ·
 `--msa` (an alignment — aligned FASTA, A3M from ColabFold/HHblits, Clustal or Stockholm;
 `--msa tube=tube.a3m,belt=belt.fasta` for several proteins. The first sequence is the
@@ -130,10 +131,12 @@ conservation track)
 **`04_pisa_concordance.py PDBID`** — optional cross-check of the buried areas against
 PISA at the PDBe. `--pisa-json FILE` uses a file you downloaded yourself.
 
-Step 03 also draws two licorice renders of the whole model — `fig_render_budget`
-(each residue in the colour of the protein that buries it) and `fig_render_interactions`
-(the most specific interaction it makes) — for a quick 3D picture without ChimeraX.
-`--render-view 0,0` gives a side view; `--no-render` skips them.
+Step 03 also draws three licorice renders of the whole model, each in three views (side,
+tilted, top, in the symmetry frame) for a quick 3D picture without ChimeraX:
+`fig_render_proteins` (each protein in its colour), `fig_render_budget` (each residue in the
+colour of the protein that buries it) and `fig_render_interactions` (the most specific
+contact it makes, hydrophobic contacts included). `--render-view ELEV,AZIM` sets the tilted
+view; `--no-render` skips them.
 
 **`05_assemblies.py`** — `--render` (licorice figure of the main candidates) ·
 `--min-kept` (0.50) · `--strong-kept` (0.67) · `--min-area` · `--colours` · `--no-pdb`
