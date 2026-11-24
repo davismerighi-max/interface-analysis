@@ -250,8 +250,34 @@ def main():
     RPT.add('hydrogens', 'ok' if hyd else 'WARNING',
           'present: H-bonds use distance + angle' if hyd else
           'none in the model: H-bonds use distance only, which over-counts')
+    _res_src = None
     if args.resolution is None:
-        RPT.warn('resolution', 'not given (--resolution): bonds are reported as tentative')
+        # Read it from the file header when not given: PDB REMARK 2, or the mmCIF refinement
+        # (X-ray) / 3D-reconstruction (cryo-EM) items. Stops at the first coordinate record.
+        try:
+            import re
+            _pat = re.compile(r'^(?:REMARK   2 RESOLUTION\.\s+([0-9.]+)\s+ANGSTROM'
+                              r'|_refine\.ls_d_res_high\s+([0-9.]+)'
+                              r'|_em_3d_reconstruction\.resolution\s+([0-9.]+)'
+                              r'|_reflns\.d_resolution_high\s+([0-9.]+))')
+            with open(args.model, encoding='utf-8', errors='replace') as _fh:
+                for _ln in _fh:
+                    if _ln.startswith(('ATOM', 'HETATM')):
+                        break
+                    _m = _pat.match(_ln)
+                    if _m:
+                        _v = float(next(g for g in _m.groups() if g))
+                        if 0.3 < _v < 50:
+                            args.resolution, _res_src = _v, 'file header'
+                            break
+        except Exception:
+            pass
+    if args.resolution is None:
+        RPT.warn('resolution', 'not given (--resolution) and not in the file header: bonds '
+                               'are reported as tentative')
+    elif _res_src:
+        RPT.ok('resolution', f'{args.resolution:g} Å, read from the file header '
+                             '(--resolution overrides it)')
     else:
         RPT.ok('resolution', f'{args.resolution:g} Å')
     log(f'model {os.path.basename(args.model)}: {len(chains)} chains, '
