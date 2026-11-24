@@ -31,14 +31,16 @@ from scipy import ndimage
 
 
 def load_ca(path, atom='CA'):
-    """{chain id: (n_res, 3) Cα coordinates} from a .pdb or .cif file."""
+    """{chain id: (n_res, 3) trace coordinates} from a .pdb or .cif file: the Cα of
+    amino acids and the C4' of nucleotides, so DNA/RNA chains are drawn too."""
     from Bio.PDB import PDBParser, MMCIFParser
     par = MMCIFParser(QUIET=True) if path.lower().endswith(('.cif', '.mmcif')) \
         else PDBParser(QUIET=True)
     model = par.get_structure('m', path)[0]
     out = {}
     for ch in model:
-        pts = [r[atom].coord for r in ch if atom in r]
+        pts = [r[atom].coord if atom in r else r["C4'"].coord for r in ch
+               if atom in r or "C4'" in r]
         if len(pts) >= 4:
             out[ch.id] = np.asarray(pts, float)
     return out
@@ -58,7 +60,11 @@ def smooth(P, step=0.4, with_index=False):
     the chain, so a per-residue colour can follow the spline."""
     out = []
     d = np.linalg.norm(np.diff(P, axis=0), axis=1)
-    starts = np.concatenate([[0], np.where(d > 4.6)[0] + 1])
+    # a break is a step much longer than this chain's usual one: 4.6 A for a protein's
+    # CA trace (3.8 A steps), ~1.6x the median step for a DNA/RNA C4' trace (6-7 A)
+    med = float(np.median(d)) if len(d) else 3.8
+    gap = 4.6 if med < 4.2 else 1.6 * med
+    starts = np.concatenate([[0], np.where(d > gap)[0] + 1])
     for off, Q in zip(starts, np.split(P, starts[1:])):
         if len(Q) < 2:
             continue
