@@ -29,7 +29,10 @@ CLSCOL = {'charged': '#DD6150', 'polar': '#7FB685', 'aromatic': '#B48BC4',
 INTCOL = {'salt': '#2E6FB7',
           'hbond': '#D9698F',
           'stack': '#3FA796',
-          'catpi': '#9B6BC9'}
+          'catpi': '#9B6BC9',
+          # hydrophobic (apolar) contacts: an olive that no other interaction, the
+          # covalent gold or the greys of 'buried, no specific contact' use
+          'phob': '#A39E3B'}
 
 
 def ramp(colour, light='#FFFFFF'):
