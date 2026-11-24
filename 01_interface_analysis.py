@@ -221,6 +221,12 @@ def main():
                     help='names and colours of the proteins: a FASTA whose headers are '
                          '"name_#RRGGBB" (colour optional). Matched to the model by '
                          'sequence; anything that does not match runs with defaults.')
+    ap.add_argument('--ligand-names', default=None, metavar='FILE',
+                    help='names and colours of bound ligands: one per line, '
+                         '"CODE  name  #RRGGBB" (CODE = the 3-letter residue name in the '
+                         'model, e.g. "UMP  dUMP  #F0A030"; name and colour optional). '
+                         'Used in the ligand tables, the residue labels of the figures and '
+                         'the ChimeraX scripts.')
     args = ap.parse_args()
 
     global LOG
@@ -359,6 +365,35 @@ def main():
             + (f'  ({nadd} flagged as common crystallisation additives)' if nadd else ''))
         log('  NOTE: ligand atoms contribute buried AREA and contacts, but carry no '
             'Eisenberg solvation parameter, so they add 0 to dG_solv.')
+    lig_names, lig_cols = {}, {}
+    if args.ligand_names:
+        with RPT.guard('ligand names', ok_detail=None):
+            import proteins as prot_io
+            given, probs = prot_io.read_ligand_names(args.ligand_names)
+            present = {lg['resn'] for lg in ligands}
+            for code, (nm, col) in given.items():
+                if code not in present:
+                    probs.append(f'{code}: no ligand with this code in the model')
+                    continue
+                lig_names[code] = nm
+                if col:
+                    lig_cols[code] = col
+            if ligands:
+                LG['name'] = [lig_names.get(x, x) for x in LG.resn]
+                LG.to_csv('ligands.csv', index=False)
+            for p in probs:
+                log('  ligand names: ' + p)
+            summ = ', '.join(f'{k} = {v}' for k, v in lig_names.items()) or 'none applied'
+            if probs:
+                RPT.warn('ligand names', summ + '. ' + '; '.join(probs))
+            else:
+                RPT.ok('ligand names', summ)
+    # a chain that is nothing but one kind of ligand takes the ligand's name
+    for i, (s_, k_) in enumerate(reps):
+        if k_ == 'ligand' and s_ in lig_names and names[i].startswith('entity_'):
+            names[i] = lig_names[s_]
+            if s_ in lig_cols:
+                colours[names[i]] = lig_cols[s_]
     if has_nucleic:
         log('  NOTE: nucleic-acid chains present. Buried area, contacts, phosphate salt '
             'bridges and base stacking (step 02) are all handled; secondary structure is '
@@ -757,6 +792,7 @@ def main():
                 if (r['chain'], r['resi']) in lig_key:
                     partner = r['c2'] if r['chain'] == r['c1'] else r['c1']
                     lrows.append(dict(chain=r['chain'], resi=r['resi'], resn=r['resn'],
+                                      name=lig_names.get(r['resn'], r['resn']),
                                       partner_chain=partner, dsasa=r['dsasa'],
                                       n_hbond=r['nhb'], n_saltbridge=r['nsb']))
             LC = pd.DataFrame(lrows)
@@ -773,7 +809,7 @@ def main():
     if ligands:
         if not RPT._has('ligands'):
             RPT.ok('ligands', f'{len(ligands)} kept: '
-                 + ', '.join(sorted({lg["resn"] for lg in ligands})))
+                 + ', '.join(sorted({lig_names.get(lg["resn"], lg["resn"]) for lg in ligands})))
     else:
         RPT.skip('ligands', 'none in the model' if not args.no_ligands else '--no-ligands')
     pd.DataFrame(bondrows).to_csv('interface_bonds.csv', index=False)
@@ -803,7 +839,8 @@ def main():
                renumbered=bool(renumbered),
                hbond_criterion=('distance+angle' if hyd else 'distance only (no H in model)'),
                dg_model='Eisenberg-McLachlan 1986 atomic solvation parameters',
-               colours=colours, proteins_fasta=args.proteins)
+               colours=colours, proteins_fasta=args.proteins,
+               ligand_names=lig_names, ligand_colours=lig_cols)
     json.dump(cfg, open('run_config.json', 'w'), indent=1)
     if conf in ('low', 'unknown'):
         log(f'NOTE: bond confidence "{conf}" — downstream steps will flag individual '
