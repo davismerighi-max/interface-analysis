@@ -102,6 +102,32 @@ the order does not matter, the full-length sequence is fine even if loops are mi
 and extra records are ignored. Anything that does not match runs with the defaults and
 is listed in `run_report.txt`. The colours carry through every later step.
 
+**DNA and RNA** are named the same way: give the bases (`>DNA_#3366CC` then `AGCGTGGGCGT`).
+Nucleotide records are compared only with DNA/RNA chains and protein records only with
+protein chains. A nucleotide record is also tried as its reverse complement, so one record
+for a duplex names both strands: the second is called `<name>_complement` and drawn in a
+lighter shade of the same colour. Give each strand its own record to name them yourself.
+
+### Naming and colouring bound ligands
+
+Ligands and cofactors are found automatically and called by their residue code (`UMP`,
+`HEM`, …). A small text file gives them names and colours, one per line
+(`CODE  name  #RRGGBB`, name and colour optional):
+
+```
+UMP   dUMP    #F0A030
+CB3   CB3717  #2CA02C
+```
+
+```bash
+python 01_interface_analysis.py MODEL.pdb --ligand-names ligand_names.txt
+```
+
+The name is added to `ligands.csv` and `ligand_contacts.csv`, used in the statistics
+summary and in the residue labels of the figures (`dUMP 265`), and both ChimeraX scripts
+show each ligand as sticks in its colour with the name as a label. A code that is not in
+the model is reported, never fatal.
+
 Alternatively, `--names tube,belt,fibre` names the proteins in order of first appearance
 in the file, and `03_make_figures.py --colours "tube=#7FA8D4,belt=#E8884A"` pins colours.
 Without either, proteins are called `entity_1`, `entity_2`, … Keep names short: they
@@ -112,7 +138,7 @@ label every axis.
 ## Options
 
 **`01_interface_analysis.py`** — `--resolution` (quotes the map/data resolution in every
-report and sets the distance tolerances; read from the file header when not given) · `--proteins FASTA` · `--names` · `--contact-cut` (5.0 Å) ·
+report and sets the distance tolerances; read from the file header when not given) · `--proteins FASTA` · `--ligand-names FILE` · `--names` · `--contact-cut` (5.0 Å) ·
 `--sasa-points` (100) · `--intra` (also analyse contacts within a chain) · `--no-shape`
 (skip shape complementarity and gap index, on by default; the slow part) · `--shape-spacing` (0.5 Å) ·
 `--shape-workers` · `--no-ligands` · `--min-ligand-atoms` (5)
