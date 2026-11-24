@@ -62,24 +62,86 @@ def coverage(model_seq, ref_seq):
     return sum(bl.size for bl in sm.get_matching_blocks()) / len(a)
 
 
+NUC_LETTERS = set('ACGTUN')
+_COMP = str.maketrans('ACGTUN', 'TGCAAN')
+
+
+def is_nucleotide(seq):
+    """True for a DNA/RNA sequence (only A C G T U N), as opposed to a protein."""
+    s = seq.upper()
+    return bool(s) and set(s) <= NUC_LETTERS
+
+
+def _nt(s):
+    return s.upper().replace('U', 'T')
+
+
 def match_entities(reps, recs, min_cover=0.90):
-    """For each entity (seq, kind) -> (record or None, coverage, note)."""
+    """For each entity (seq, kind) -> (record or None, coverage, note).
+
+    Protein chains are only compared with protein records and DNA/RNA chains only with
+    nucleotide records: A, C, G and T are amino-acid letters too, so a short DNA strand
+    would otherwise "match" almost any long protein sequence. A DNA/RNA chain is also
+    compared with the reverse complement of each record, so ONE line for a duplex names
+    both strands: the second is called <name>_complement (same colour)."""
     out = []
     for seq, kind in reps:
         if kind == 'ligand' or not seq:
             out.append((None, 0.0, 'ligand-only chain, not matched')); continue
-        best, cov = None, 0.0
+        nuc = kind == 'nucleic'
+        best, cov, rc = None, 0.0, False
         for r in recs:
-            if not r['seq']:
+            if not r['seq'] or is_nucleotide(r['seq']) != nuc:
                 continue
-            c = coverage(seq, r['seq'])
+            if nuc:
+                fwd = coverage(_nt(seq), _nt(r['seq']))
+                rev = coverage(_nt(seq), _nt(r['seq']).translate(_COMP)[::-1])
+                c, is_rc = (fwd, False) if fwd >= rev else (rev, True)
+            else:
+                c, is_rc = coverage(seq, r['seq']), False
             if c > cov:
-                best, cov = r, c
+                best, cov, rc = r, c, is_rc
+        what = 'nucleotide' if nuc else 'protein'
         if best is not None and cov >= min_cover:
+            if rc:
+                # same hue, lighter, so the two strands can be told apart as partners
+                col = best['colour']
+                if col:
+                    rgb = [int(col[k:k + 2], 16) for k in (1, 3, 5)]
+                    col = '#' + ''.join(f'{int(v + 0.45 * (255 - v)):02X}' for v in rgb)
+                best = dict(best, name=best['name'] + '_complement', colour=col)
             out.append((best, cov, f'matched "{best["name"]}" ({100 * cov:.0f} % of the '
-                                   'modelled sequence)'))
+                                   'modelled sequence'
+                                   + (', complementary strand)' if rc else ')')))
         else:
             near = (f'; closest was "{best["name"]}" at {100 * cov:.0f} %' if best else '')
-            out.append((None, cov, f'no FASTA record covers ≥{100 * min_cover:.0f} % of '
+            out.append((None, cov, f'no {what} record covers ≥{100 * min_cover:.0f} % of '
                                    f'this sequence{near}'))
     return out
+
+
+def read_ligand_names(path):
+    """{CODE: (name, colour or None)} and a list of problems, from lines
+    "CODE  name  #RRGGBB" (name and colour optional; also "CODE=name"). Never raises on
+    bad content; '#' lines that are not a colour are treated as comments."""
+    out, probs = {}, []
+    with open(path, encoding='utf-8', errors='replace') as f:
+        for n, line in enumerate(f, 1):
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            tok = line.replace('=', ' ').replace(',', ' ').replace('\t', ' ').split()
+            code, rest = tok[0].upper(), tok[1:]
+            col = None
+            if rest and rest[-1].startswith('#'):
+                if HEX.match(rest[-1]):
+                    col = rest[-1].upper()
+                else:
+                    probs.append(f'line {n}: colour "{rest[-1]}" is not #RRGGBB; default used')
+                rest = rest[:-1]
+            name = '_'.join(rest) or code
+            if len(code) > 5:
+                probs.append(f'line {n}: "{code}" does not look like a residue code; skipped')
+                continue
+            out[code] = (name, col)
+    return out, probs
