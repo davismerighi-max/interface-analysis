@@ -552,8 +552,12 @@ def save(fig, name):
 # The footprint says how much surface a residue buries; it says nothing about HOW that
 # surface is held. These counts answer the second question on the same residue axis:
 # how many salt bridges, hydrogen bonds, stacking and cation-pi contacts each residue
-# makes across the interfaces of its environment, averaged over the symmetry copies.
-INTORD = ['salt', 'hbond', 'stack', 'catpi']
+# makes across the interfaces of its environment, averaged over the symmetry copies -
+# and how many partner residues it packs against through apolar (C/S-C/S) contacts.
+# A hydrophobic contact is counted once per partner residue with at least --phobic-min
+# apolar atom contacts, the same rule as the hydrophobic edges of the network figure, so
+# the track counts residue-residue contacts on one scale with the bonds.
+INTORD = ['salt', 'hbond', 'stack', 'catpi', 'phob']
 KINDMAP = {'saltbridge': 'salt', 'hbond': 'hbond', 'pi_stack_T': 'stack',
            'pi_stack_parallel': 'stack', 'cation_pi': 'catpi'}
 INTRES = collections.defaultdict(collections.Counter)
@@ -566,6 +570,14 @@ for _df in (B, AR):
             continue
         INTRES[(_c1, int(_r1))][_kk] += 1
         INTRES[(_c2, int(_r2))][_kk] += 1
+try:
+    _PH = pd.read_csv('interface_hydrophobic.csv')
+    _PH = _PH[_PH.n_contacts >= args.phobic_min]
+    for _c1, _r1, _c2, _r2 in zip(_PH.c1, _PH.ri1, _PH.c2, _PH.ri2):
+        INTRES[(_c1, int(_r1))]['phob'] += 1
+        INTRES[(_c2, int(_r2))]['phob'] += 1
+except Exception:                      # no table, or an empty one: no hydrophobic counts
+    pass
 HAS_INT = bool(INTRES) and not args.no_interaction_track
 
 
@@ -722,7 +734,7 @@ with RPT.guard('footprint figures', ok_detail='fig1..N_<protein>_footprints'):
                         axi.set_yticks([0, _top] if _top < 6 else [0, _top // 2, _top])
                     tidy(axi); axi.spines['bottom'].set_visible(False)
                     axi.tick_params(labelbottom=False, bottom=False, labelsize=5.5)
-                    axi.set_ylabel('bonds', fontsize=6.5)
+                    axi.set_ylabel('contacts', fontsize=6.5)
                     axi.yaxis.set_label_coords(YLAB_X, 0.5)
                     y += ih + GAP_AX
 
@@ -795,7 +807,8 @@ with RPT.guard('footprint figures', ok_detail='fig1..N_<protein>_footprints'):
             g = [title('interaction')]
             g += [mpl.patches.Patch(fc=fs.INTCOL[k], ec='none', label=t)
                   for k, t in [('salt', 'salt bridge'), ('hbond', 'hydrogen bond'),
-                               ('stack', 'aromatic stacking'), ('catpi', 'cation–π')]
+                               ('stack', 'aromatic stacking'), ('catpi', 'cation–π'),
+                               ('phob', 'hydrophobic contact')]
                   if any(iprof[e][k].sum() > 0 for e in envs)]
             groups.append(g)
         groups.append([title('structure'),
@@ -1405,7 +1418,7 @@ with RPT.guard('fig_interaction_networks', ok_detail='written'):
     LINKS = pd.read_csv('interface_links.csv') if os.path.exists('interface_links.csv') \
         else pd.DataFrame(columns=['kind', 'bonded', 'c1', 'resi1', 'resn1', 'c2', 'resi2', 'resn2'])
     COVAL = fs.COVALENT
-    PHOBCOL = '#C8C8C8'
+    PHOBCOL = fs.INTCOL['phob']            # same colour as the footprint track and the renders
     PHOB = pd.read_csv('interface_hydrophobic.csv') if os.path.exists('interface_hydrophobic.csv') \
         else pd.DataFrame(columns=['c1', 'c2', 'ri1', 'rn1', 'ri2', 'rn2', 'n_contacts'])
 
@@ -1458,7 +1471,7 @@ with RPT.guard('fig_interaction_networks', ok_detail='written'):
         xl, xr = 0.20, 0.80
         for a_i, a_n, b_i, b_n, _k, nc in phob:
             ax.plot([xl, xr], [yl[(a_i, a_n)], yr[(b_i, b_n)]], lw=float(np.interp(nc, [3, 12], [0.5, 1.5])),
-                    color=PHOBCOL, zorder=0, solid_capstyle='round')
+                    color=PHOBCOL, alpha=0.55, zorder=0, solid_capstyle='round')
         for a_i, a_n, b_i, b_n, kind, d in eds:
             ax.plot([xl, xr], [yl[(a_i, a_n)], yr[(b_i, b_n)]], lw=lw_for_distance(d),
                     color=fs.INTCOL.get(kind, '#999999'), zorder=1, solid_capstyle='round',
@@ -1523,7 +1536,7 @@ with RPT.guard('fig_interaction_networks', ok_detail='written'):
             if any(p[5] for p in page):
                 hh.append(mpl.patches.Patch(fc=COVAL, ec='none', label='disulfide / covalent'))
             if any(p[6] for p in page):
-                hh.append(mpl.patches.Patch(fc=PHOBCOL, ec='none',
+                hh.append(mpl.patches.Patch(fc=PHOBCOL, ec='none', alpha=0.55,
                                             label=f'hydrophobic (≥{args.phobic_min} contacts)'))
             fig.legend(handles=hh, frameon=False, fontsize=6.3, loc='upper center',
                        ncol=len(hh), bbox_to_anchor=(0.5, 1 - 0.40 / FH),
@@ -1674,12 +1687,13 @@ with RPT.guard('ChimeraX files', ok_detail='model_interfaces.pdb + 2 .cxc script
         # ---- second script: colour by the kind of interaction a residue makes ----
         # A residue can make several kinds at once, so one colour per residue has to be a
         # choice. The most specific and most structurally constraining wins: a salt bridge
-        # over cation-pi, over stacking, over a hydrogen bond. Residues that bury surface
-        # but make none of these are left in a neutral tone - that is the "non-specific
-        # contact" class, and seeing how much of an interface it covers is the point.
+        # over cation-pi, over stacking, over a hydrogen bond, over a hydrophobic contact
+        # (>= --phobic-min apolar atom contacts with one partner residue). Residues that
+        # bury surface but make none of these are left in a neutral tone - the
+        # "no specific contact" class.
         PRIORITY = [('covalent', 'disulfide / covalent'), ('salt', 'salt bridge'),
                     ('catpi', 'cation-pi'), ('stack', 'aromatic stacking'),
-                    ('hbond', 'hydrogen bond')]
+                    ('hbond', 'hydrogen bond'), ('phob', 'hydrophobic contact')]
         NONSPEC = '#C8C8C8'
         covres = set()
         if len(LINKS):
@@ -1756,20 +1770,23 @@ with RPT.guard('ChimeraX files', ok_detail='model_interfaces.pdb + 2 .cxc script
 
 # ============================================================ whole-model renders
 # The same flat, silhouetted licorice as fig_assemblies, painted residue by residue, for
-# readers who want the 3D picture without opening ChimeraX. Two colourings, both on the
-# same --bsa-min cut-off as the ChimeraX scripts so 2D, ChimeraX and these renders agree:
+# readers who want the 3D picture without opening ChimeraX. Every figure shows the model in
+# THREE views, in the symmetry frame (z = symmetry axis): from the side with the axis
+# vertical, tilted (--render-view, default 62,20), and from the top, down the axis.
+#   proteins      each protein in its colour; neighbouring chains alternate in shade
 #   budget        the protein that buries most of each residue (the legend of the
 #                 "Interface budget" panel), grey where the residue is not at an interface
-#   interactions  the most specific interaction each residue makes, in the same priority
-#                 as chimerax_colour_by_interaction.cxc: covalent > salt bridge >
-#                 cation-pi > stacking > hydrogen bond; buried without any of these in a
+#   interactions  the most specific contact each residue makes, in the same priority as
+#                 chimerax_colour_by_interaction.cxc: covalent > salt bridge > cation-pi >
+#                 stacking > hydrogen bond > hydrophobic; buried without any of these in a
 #                 mid grey, not at an interface in a light grey
-# Interfaces are mostly INSIDE an assembly, so a single view shows the outer surface of
-# the contacts only; --render-view picks another camera.
+# All use the --bsa-min cut-off of the ChimeraX scripts, so 2D, ChimeraX and the renders
+# agree residue for residue.
 if not args.render:
     RPT.skip('whole-model renders', 'not requested (--no-render)')
 else:
-  with RPT.guard('whole-model renders', ok_detail='fig_render_budget + fig_render_interactions'):
+  with RPT.guard('whole-model renders', ok_detail='fig_render_proteins, fig_render_budget, '
+                                                  'fig_render_interactions (3 views each)'):
     from render_assembly import licorice
     try:
         _el, _az = (float(x) for x in args.render_view.split(','))
@@ -1777,6 +1794,13 @@ else:
         _el, _az = 62.0, 20.0
         RPT.default('render view', f'could not read --render-view {args.render_view!r}; '
                                    'used 62,20')
+    # model -> symmetry frame (rows of frame_rotation are the frame axes; z = the axis)
+    try:
+        _FR = np.asarray(CFG['frame_rotation'], float)
+        _FO = np.asarray(CFG['frame_origin'], float)
+        assert _FR.shape == (3, 3) and _FO.shape == (3,)
+    except Exception:
+        _FR, _FO = np.eye(3), None
     _BUR = pd.read_csv('residue_burial_assembly.csv')
     _bur = {(r.chain, int(r.resi)): float(r.buried) for r in _BUR.itertuples()}
     # area each residue loses to each partner PROTEIN, summed over the partner chains
@@ -1797,13 +1821,12 @@ else:
             if r.c1 in prot:
                 _by[(r.c2, int(r.resi2))][prot[r.c1]] += 0.0
     G_OUT, G_NONSPEC = '#E3E3E3', '#BDBDBD'
-    ICOL = {'covalent': fs.COVALENT, 'salt': mpl.colors.to_hex(fs.INTCOL['salt']),
-            'catpi': mpl.colors.to_hex(fs.INTCOL['catpi']),
-            'stack': mpl.colors.to_hex(fs.INTCOL['stack']),
-            'hbond': mpl.colors.to_hex(fs.INTCOL['hbond']), 'none': G_NONSPEC}
+    _KIND_ORDER = ('salt', 'catpi', 'stack', 'hbond', 'phob')
+    ICOL = {'covalent': fs.COVALENT, 'none': G_NONSPEC}
+    ICOL.update({k: mpl.colors.to_hex(fs.INTCOL[k]) for k in _KIND_ORDER})
     ILAB = {'covalent': 'disulfide / covalent', 'salt': 'salt bridge', 'catpi': 'cation–π',
             'stack': 'aromatic stacking', 'hbond': 'hydrogen bond',
-            'none': 'buried, no specific contact'}
+            'phob': 'hydrophobic contact', 'none': 'buried, no specific contact'}
     _CA, _cb, _ci, _rows = {}, {}, {}, []
     _nb, _ni = collections.Counter(), collections.Counter()
     for ch in model:
@@ -1818,8 +1841,7 @@ else:
                 cls = 'covalent'
             elif at_if:
                 cnt = INTRES.get(key)
-                cls = next((k for k in ('salt', 'catpi', 'stack', 'hbond')
-                            if cnt and cnt.get(k)), 'none')
+                cls = next((k for k in _KIND_ORDER if cnt and cnt.get(k)), 'none')
             else:
                 cls = None
             if part is None and at_if:
@@ -1831,26 +1853,60 @@ else:
                           {None: '', '_multi': 'several chains together'}.get(part, part),
                           cls or ''))
         if len(pts) >= 4:
-            _CA[ch.id] = np.asarray(pts, float); _cb[ch.id] = cb; _ci[ch.id] = ci
+            P_ = np.asarray(pts, float)
+            if _FO is not None:
+                P_ = (P_ - _FO) @ _FR.T
+            _CA[ch.id] = P_; _cb[ch.id] = cb; _ci[ch.id] = ci
     pd.DataFrame(_rows, columns=['chain', 'resi', 'protein', 'buried_mainly_by',
                                  'interaction_class']).to_csv('render_residue_colours.csv',
                                                               index=False)
 
-    def _render(cols, title, handles, fname):
-        fig = plt.figure(figsize=(3.4, 3.85))
-        ax = fig.add_axes([0.01, 0.215, 0.98, 0.685])
-        licorice(ax, _CA, cols, elev=_el, azim=_az, dpi=600)
-        fig.text(0.5, 0.985, f'{len(_CA)} chains · whole model\n{title}', ha='center',
-                 va='top', fontsize=5.6, color='#333333', linespacing=1.35)
-        fig.legend(handles=handles, frameon=False, fontsize=5.2, loc='upper center',
-                   ncol=2, bbox_to_anchor=(0.5, 0.185), handlelength=1.0,
-                   handletextpad=0.4, columnspacing=1.2, labelspacing=0.35)
-        fig.text(0.5, 0.208, f'residues burying ≥ {args.bsa_min:g} Å$^2$ coloured · '
-                 f'view elev {_el:g}°, azim {_az:g}°', ha='center', va='top', fontsize=4.6,
-                 color='#8A8A8A')
+    # proteins: one colour per protein, neighbouring chains in three alternating shades so
+    # the subunits can be told apart (ordered by height along the axis, then by angle)
+    _cp = {}
+    for e in ENTS:
+        chs = [c for c in _CA if prot.get(c) == e]
+        ctr = {c: _CA[c].mean(axis=0) for c in chs}
+        zs = np.array([ctr[c][2] for c in chs]) if chs else np.array([])
+        zstep = max(float(np.ptp(zs)) / 8.0, 4.0) if len(zs) else 1.0
+        chs.sort(key=lambda c: (round(ctr[c][2] / zstep), np.arctan2(ctr[c][1], ctr[c][0])))
+        base = mpl.colors.to_rgb(PAL[e])
+        tones = [base, tuple(0.62 * np.array(base) + 0.38), tuple(0.72 * np.array(base))]
+        for k, c in enumerate(chs):
+            _cp[c] = mpl.colors.to_hex(tones[k % 3]) if len(chs) > 1 else PAL[e]
+
+    VIEWS = [(0.0, _az, 'side · axis vertical'), (_el, _az, f'tilted · {_el:g}°'),
+             (90.0, _az, 'top · down the axis')]
+
+    def _render(cols, title, handles, fname, ncol=3, note=None):
+        W_, PW = 7.2, 2.3                                # inches: figure, one panel
+        nrow_leg = int(np.ceil(len(handles) / ncol))
+        FH = 0.42 + PW + 0.22 + 0.15 * nrow_leg + 0.12
+        fig = plt.figure(figsize=(W_, FH))
+        gap = (W_ - 3 * PW) / 4
+        for k, (el, az, lab) in enumerate(VIEWS):
+            ax = fig.add_axes([(gap + k * (PW + gap)) / W_, (FH - 0.42 - PW) / FH,
+                               PW / W_, PW / FH])
+            licorice(ax, _CA, cols, elev=el, azim=az, dpi=600)
+            fig.text((gap + k * (PW + gap) + PW / 2) / W_, (FH - 0.40) / FH, lab,
+                     ha='center', va='bottom', fontsize=5.6, color='#555555')
+        fig.text(0.5, 1 - 0.05 / FH, f'{len(_CA)} chains · whole model · {title}',
+                 ha='center', va='top', fontsize=6.8, color='#333333')
+        ytop = (FH - 0.42 - PW - 0.06) / FH
+        if note is None:
+            note = f'residues burying ≥ {args.bsa_min:g} Å$^2$ coloured · symmetry axis = z'
+        fig.text(0.5, ytop, note, ha='center', va='top', fontsize=4.8, color='#8A8A8A')
+        fig.legend(handles=handles, frameon=False, fontsize=5.4, loc='upper center',
+                   ncol=ncol, bbox_to_anchor=(0.5, ytop - 0.14 / FH), handlelength=1.0,
+                   handletextpad=0.4, columnspacing=1.6, labelspacing=0.35)
         fig.savefig(fname + '.png', dpi=600); fig.savefig(fname + '.pdf'); plt.close(fig)
         print('wrote', fname, flush=True)
 
+    _hp = [mpl.patches.Patch(fc=PAL[e], ec='#1E1E1E', lw=0.3,
+                             label=f'{e}  ({sum(1 for c in _CA if prot.get(c) == e)} chains)')
+           for e in ENTS if any(prot.get(c) == e for c in _CA)]
+    _render(_cp, 'coloured by protein (shades = individual chains)', _hp,
+            'fig_render_proteins', note='symmetry axis = z')
     _hb = [mpl.patches.Patch(fc=PAL[e], ec='#1E1E1E', lw=0.3,
                              label=f'buried mainly by {e}  ({_nb[e]:,})')
            for e in ENTS if _nb[e]]
@@ -1863,11 +1919,12 @@ else:
     _render(_cb, 'coloured by burying partner (interface budget)', _hb, 'fig_render_budget')
     _hi = [mpl.patches.Patch(fc=ICOL[k], ec='#1E1E1E', lw=0.3,
                              label=f'{ILAB[k]}  ({_ni[k]:,})')
-           for k in ('covalent', 'salt', 'catpi', 'stack', 'hbond', 'none') if _ni[k]]
+           for k in ('covalent',) + _KIND_ORDER + ('none',) if _ni[k]]
     _hi.append(mpl.patches.Patch(fc=G_OUT, ec='#1E1E1E', lw=0.3,
                                  label=f'not at an interface  ({_ni[None]:,})'))
-    _ttl = 'coloured by directional interaction'
+    _ttl = 'coloured by interaction type'
     if LOWCONF:
         _ttl += f'  ({LOWTXT})'
-    _render(_ci, _ttl, _hi, 'fig_render_interactions')
+    _render(_ci, _ttl, _hi, 'fig_render_interactions', ncol=4)
+
 RPT.done()
