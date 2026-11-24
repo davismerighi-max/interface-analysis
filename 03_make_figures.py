@@ -105,6 +105,10 @@ ONE = {'ALA': 'A', 'ARG': 'R', 'ASN': 'N', 'ASP': 'D', 'CYS': 'C', 'GLN': 'Q', '
 # nucleotides keep their own one-letter form so a DNA/RNA chain reads as a sequence
 ONE.update({n: n[-1].lower() for n in
             ('A', 'C', 'G', 'U', 'T', 'DA', 'DC', 'DG', 'DT', 'DU', 'I')})
+# bound ligands named with --ligand-names in step 01 are labelled by that name
+LIGNAME = dict(CFG.get('ligand_names') or {})
+LIGCOL = dict(CFG.get('ligand_colours') or {})
+ONE.update({k: v + ' ' for k, v in LIGNAME.items()})
 CLSORD = ['charged', 'polar', 'aromatic', 'aliphatic', 'Gly / Pro', 'nucleotide',
           'ligand', 'other']
 BLAB = {'salt': 'salt bridge', 'hbond': 'hydrogen bond',
@@ -1681,8 +1685,22 @@ with RPT.guard('ChimeraX files', ok_detail='model_interfaces.pdb + 2 .cxc script
                  f'# Residues burying at least {bsa_min:g} A^2 are coloured by symmetry',
                  '# environment, exactly as in the footprint figures; the rest stay grey.',
                  '']
+        # bound ligands: sticks, carbon in the ligand's colour, heteroatoms by element,
+        # with the name given in --ligand-names as a label
+        lig_cmds = []
+        for code in CFG.get('ligand_resn') or []:
+            lc = LIGCOL.get(code, '#8C6239')
+            lig_cmds += [f'show :{code} atoms', f'style :{code} stick',
+                         f'color :{code} {lc}', f'color :{code} byhetero']
+            if code in LIGNAME:
+                lig_cmds.append(f'label :{code} text "{LIGNAME[code]}" height 1.2')
+        if lig_cmds:
+            lig_cmds = ['', '# bound ligands (sticks; heteroatoms by element)'] + lig_cmds
+            key += ['# ligands:'] + [f'#   {c:<5} {LIGNAME.get(c, c):<14} '
+                                     f'{LIGCOL.get(c, "#8C6239")}'
+                                     for c in CFG.get('ligand_resn') or []]
         open('chimerax_colour_only.cxc', 'w').write(
-            '\n'.join(head2 + colour_cmds + key) + '\n')
+            '\n'.join(head2 + colour_cmds + lig_cmds + key) + '\n')
 
         # ---- second script: colour by the kind of interaction a residue makes ----
         # A residue can make several kinds at once, so one colour per residue has to be a
@@ -1760,7 +1778,7 @@ with RPT.guard('ChimeraX files', ok_detail='model_interfaces.pdb + 2 .cxc script
                  '# residue carries the same colour in 2D and in 3D.',
                  '']
         open('chimerax_colour_by_interaction.cxc', 'w').write(
-            '\n'.join(ihead + icmds + ikey) + '\n')
+            '\n'.join(ihead + icmds + lig_cmds + ikey) + '\n')
         print(f'wrote chimerax_colour_only.cxc and chimerax_colour_by_interaction.cxc '
               f'({len(sel)} residues >= {bsa_min:g} A^2 coloured)', flush=True)
 
@@ -1832,9 +1850,11 @@ else:
     for ch in model:
         cb, ci, pts = [], [], []
         for res in ch:
-            if 'CA' not in res:
+            # trace atom: CA for amino acids, C4' for nucleotides (DNA / RNA)
+            _ta = 'CA' if 'CA' in res else ("C4'" if "C4'" in res else None)
+            if _ta is None:
                 continue
-            key = (ch.id, res.id[1]); pts.append(res['CA'].coord)
+            key = (ch.id, res.id[1]); pts.append(res[_ta].coord)
             at_if = _bur.get(key, 0.0) >= args.bsa_min or key in _cov
             part = max(_by[key], key=_by[key].get) if (at_if and _by.get(key)) else None
             if key in _cov:
@@ -1890,7 +1910,7 @@ else:
             licorice(ax, _CA, cols, elev=el, azim=az, dpi=600)
             fig.text((gap + k * (PW + gap) + PW / 2) / W_, (FH - 0.40) / FH, lab,
                      ha='center', va='bottom', fontsize=5.6, color='#555555')
-        fig.text(0.5, 1 - 0.05 / FH, f'{len(_CA)} chains · whole model · {title}',
+        fig.text(0.5, 1 - 0.05 / FH, f'{len(_CA)} chain{"s" if len(_CA) != 1 else ""} · whole model · {title}',
                  ha='center', va='top', fontsize=6.8, color='#333333')
         ytop = (FH - 0.42 - PW - 0.06) / FH
         if note is None:
@@ -1903,9 +1923,9 @@ else:
         print('wrote', fname, flush=True)
 
     _hp = [mpl.patches.Patch(fc=PAL[e], ec='#1E1E1E', lw=0.3,
-                             label=f'{e}  ({sum(1 for c in _CA if prot.get(c) == e)} chains)')
+                             label=(lambda n_: f'{e}  ({n_} chain{"s" if n_ != 1 else ""})')(sum(1 for c in _CA if prot.get(c) == e)))
            for e in ENTS if any(prot.get(c) == e for c in _CA)]
-    _render(_cp, 'coloured by protein (shades = individual chains)', _hp,
+    _render(_cp, 'coloured by molecule (shades = individual chains)', _hp,
             'fig_render_proteins', note='symmetry axis = z')
     _hb = [mpl.patches.Patch(fc=PAL[e], ec='#1E1E1E', lw=0.3,
                              label=f'buried mainly by {e}  ({_nb[e]:,})')
