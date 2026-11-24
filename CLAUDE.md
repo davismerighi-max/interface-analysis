@@ -93,9 +93,11 @@ state a number that is not in the output.
   exposed is residue X really".
 
 ### 3.4 Footprints — `fig<N>_<protein>_footprints`, `footprints_by_environment.csv`
-- Per residue: buried area coloured by partner (by interface in a homo-oligomer), bond
-  counts by type, an interaction-density curve, and the ΔG strip (blue pays, orange
-  costs). Name the hotspot segments and the labelled residues, and point out where two
+- Per residue: buried area coloured by partner (by interface in a homo-oligomer), contact
+  counts by type (salt bridge, H-bond, stacking, cation–π and hydrophobic: one count per
+  partner residue with >= --phobic-min apolar atom contacts), an interaction-density
+  curve, and the ΔG strip (blue pays, orange costs). Hydrophobic counts are residue-pair
+  contacts, not bonds: do not add them to the bond totals of fig_chemistry. Name the hotspot segments and the labelled residues, and point out where two
   environments of the same protein differ — those differences are real.
 
 ### 3.5 Chemistry — `fig_chemistry`, `interaction_density_by_category.csv`, `interface_bonds_unique.csv`
@@ -132,6 +134,14 @@ state a number that is not in the output.
 - Residue-to-residue map of each symmetry-unique interface. Colour = interaction type;
   line width = bond length (thicker = shorter, key in the legend); yellow = covalent.
   Use it to name the residue pairs behind the numbers above.
+
+### 3.9b 3D renders — `fig_render_proteins`, `fig_render_budget`, `fig_render_interactions`
+- Each shows the whole model three times in the symmetry frame (z = axis): side, tilted,
+  top. Colour per residue with the --bsa-min cut-off of the ChimeraX scripts; the
+  interaction colouring uses the priority covalent > salt bridge > cation–π > stacking >
+  H-bond > hydrophobic, and `render_residue_colours.csv` lists every residue's class.
+  They are overviews: interfaces are mostly inside the assembly, so for any residue-level
+  claim point to the footprints, networks or ChimeraX.
 
 ### 3.10 Ligands — `ligands.csv`, `ligand_contacts.csv`
 - Cofactors are kept by default. A ligand touching two chains is part of the interface
