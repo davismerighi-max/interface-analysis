@@ -377,6 +377,12 @@ else:
         import matplotlib.pyplot as plt
         from render_assembly import load_ca, licorice
         CA = load_ca(args.model)
+        try:                     # draw in the symmetry frame, as the step-03 renders do
+            _FR = np.asarray(CFG['frame_rotation'], float)
+            _FO = np.asarray(CFG['frame_origin'], float)
+            CA = {k: (v - _FO) @ _FR.T for k, v in CA.items()}
+        except Exception:
+            pass
         PAL = ['#7FA8D4', '#E8884A', '#95C892', '#B48BC4', '#D4B36A', '#7FC4C4']
         ents = [e['name'] for e in CFG.get('entities', [])] or sorted(set(ENT.values()))
         cmap = {e: PAL[i % len(PAL)] for i, e in enumerate(ents)}
