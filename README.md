@@ -15,8 +15,9 @@ same path through the same three scripts.
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/davismerighi-max/interface-analysis/blob/main/notebooks/interface_analysis_colab.ipynb)
 
-*No installation, no programming: click the badge, upload your model, run the cells,
-download a zip of every table and figure.*
+*No installation, no programming: click the badge, press ▶ on box ① and fill in the form
+(PDB code or upload, proteins, alignments, options), then press ▶ on box ② — the figures
+appear in the notebook and a zip of every table and figure downloads.*
 
 <p align="center"><img src="docs/pipeline_flow.png" width="760"></p>
 
