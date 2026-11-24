@@ -39,6 +39,13 @@ python 06_organise_results.py   MODEL.cif          # MODEL_results/, one folder 
   optional); records are matched to the model BY SEQUENCE, so order does not matter and
   extra records are harmless. If the user gives names and colours in conversation,
   write this file for them. Keep names short (they label every axis).
+  DNA/RNA records (bases only) are matched only to nucleic chains, also as the reverse
+  complement: one record for a duplex names both strands, the second `<name>_complement`
+  in a lighter shade. Protein records never match nucleic chains.
+- `--ligand-names FILE` names and colours bound ligands: lines `CODE  name  #RRGGBB`
+  (CODE = residue name in the model, as listed under "ligands" in run_report.txt). Names
+  go into ligands.csv / ligand_contacts.csv, the figure labels and the ChimeraX scripts
+  (sticks + label). Codes not in the model give a WARNING, not a failure.
 - `04_pisa_concordance.py PDBID` is the only step that touches the network. Optional.
 - Steps 01–03 and 05 need no internet; they run on air-gapped cluster nodes.
 - Large assemblies (> ~50 chains, ribosomes, capsids) belong on a workstation or a
