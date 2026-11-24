@@ -394,14 +394,23 @@ else:
         colmap = {c: cmap.get(ENT[c], '#9A9A9A') for c in chains}
         show = A[A['class'] != 'not supported by contacts'].head(4)
         n = max(len(show), 1)
-        fig, axs = plt.subplots(1, n, figsize=(1.85 * n, 2.3), squeeze=False)
-        for ax, (_, r) in zip(axs[0], show.iterrows()):
+        import textwrap
+        # a long composition ("1xDNA + 1xDNA_complement + 1xZif268") is wrapped at the
+        # "+" signs so the title stays inside its panel
+        titles = []
+        for _, r in show.iterrows():
+            comp = textwrap.fill(str(r.composition), 34, break_long_words=False,
+                                 break_on_hyphens=False)
+            titles.append(f'{r.n_chains} chain{"s" if r.n_chains != 1 else ""} · {comp}\n'
+                          f'kept {100*r.kept:.0f} %  ·  {r["class"]}')
+        nl = max((t.count('\n') + 1 for t in titles), default=2)
+        FH = 1.95 + 0.11 * nl
+        fig, axs = plt.subplots(1, n, figsize=(1.85 * n, FH), squeeze=False)
+        for ax, (_, r), tt in zip(axs[0], show.iterrows(), titles):
             sub = {c: CA[c] for c in r.chains if c in CA}
             licorice(ax, sub, colmap, elev=62, azim=20, dpi=600)
-            ax.set_title(f'{r.n_chains} chains · {r.composition}\n'
-                         f'kept {100*r.kept:.0f} %  ·  {r["class"]}',
-                         fontsize=5.6, color='#333333', pad=3)
-        fig.subplots_adjust(0.005, 0.01, 0.995, 0.86, wspace=0.03)
+            ax.set_title(tt, fontsize=5.6, color='#333333', pad=3)
+        fig.subplots_adjust(0.005, 0.01, 0.995, 1 - (0.11 * nl + 0.08) / FH, wspace=0.03)
         fig.savefig('fig_assemblies.png', dpi=600); fig.savefig('fig_assemblies.pdf')
         plt.close(fig)
 RPT.done()
