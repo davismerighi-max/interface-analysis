@@ -523,7 +523,9 @@ with RPT.guard('aromatic interactions', ok_detail='aromatic_interactions.csv'):
     if CFG.get('has_ligand') and os.path.exists('ligand_contacts.csv'):
         LC = pd.read_csv('ligand_contacts.csv')
         if len(LC):
-            g = LC.groupby(['chain', 'resi', 'resn']).agg(
+            if 'name' not in LC.columns:
+                LC['name'] = LC.resn
+            g = LC.groupby(['chain', 'resi', 'resn', 'name']).agg(
                 partners=('partner_chain', 'nunique'), buried=('dsasa', 'sum'),
                 hbonds=('n_hbond', 'sum'), salt=('n_saltbridge', 'sum'))
             say('\nbound ligands at inter-chain interfaces (ligand_contacts.csv):')
