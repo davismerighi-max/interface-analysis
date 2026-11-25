@@ -384,7 +384,7 @@ else:
         except Exception:
             pass
         PAL = ['#7FA8D4', '#E8884A', '#95C892', '#B48BC4', '#D4B36A', '#7FC4C4']
-        ents = [e['name'] for e in CFG.get('entities', [])] or sorted(set(ENT.values()))
+        ents = list(dict.fromkeys(e['name'] for e in CFG.get('entities', []))) or sorted(set(ENT.values()))
         cmap = {e: PAL[i % len(PAL)] for i, e in enumerate(ents)}
         cmap.update(CFG.get('colours') or {})
         if args.colours:
