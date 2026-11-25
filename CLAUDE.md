@@ -45,6 +45,11 @@ python 06_organise_results.py   MODEL.cif          # MODEL_results/, one folder 
   Two chain groups that match the same record (pieces of one molecule, e.g. 4I6Z's DNA
   halves C = 1-12 and D = 13-24 of one 24-mer) both take its name; downstream code works by
   entity_name, so they share one footprint figure with one environment each.
+- Partner colours: step 03 colours partner segments by SUBUNIT (symmetry environment) in
+  shades of the partner molecule (ENVCOL/ENVLAB, same as fig_architecture) in inventory b,
+  area-partition b and fig_render_budget, and in the footprints when the model has <= 6
+  environments (more stay per molecule, e.g. tail1 with 10). `--partner-colours molecule`
+  restores one colour per molecule. Table: subunit_budget_by_partner_subunit.csv.
 - Bonded HETATM residues (MSE, SEP, ...) are kept in the polymer by load_model, never as
   ligands; the analysis log lists them. Fig_chemistry panel b now stacks hydrophobic
   residue pairs (>= 3 apolar atom contacts, column `phob` of
