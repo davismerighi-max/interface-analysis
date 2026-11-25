@@ -178,7 +178,7 @@ with RPT.guard('footprints', ok_detail='footprints_by_environment.csv'):
     # same protein, so "buried by entity X" carries no information and the figures must
     # colour by which distinct interface the surface belongs to instead.
     RES['pctg'] = [ctg_of(a, b) for a, b in zip(RES.c1, RES.c2)]
-    pw = RES.groupby(['chain', 'resi', 'pent', 'pctg']).dsasa.sum().reset_index()
+    pw = RES.groupby(['chain', 'resi', 'pent', 'penv', 'pctg']).dsasa.sum().reset_index()
     tot = pw.groupby(['chain', 'resi']).dsasa.sum().rename('pw').reset_index()
     pw = pw.merge(tot).merge(BUR[['chain', 'resi', 'resn', 'buried']], on=['chain', 'resi'])
     pw = pw[pw.pw > 0]
@@ -191,7 +191,7 @@ with RPT.guard('footprints', ok_detail='footprints_by_environment.csv'):
     # one copy of the environment and not in another; averaging only the non-zero rows would
     # silently divide by a smaller number and inflate the footprint.
     nchain = pw.groupby('env').chain.nunique()
-    ENV = (pw.groupby(['entity_name', 'env', 'resi', 'resn', 'pent', 'pctg']).attr.sum()
+    ENV = (pw.groupby(['entity_name', 'env', 'resi', 'resn', 'pent', 'penv', 'pctg']).attr.sum()
            .reset_index().rename(columns={'pent': 'pfam'}))
     ENV['dsasa'] = ENV.attr / ENV.env.map(nchain)
     ENV = ENV.drop(columns='attr')
