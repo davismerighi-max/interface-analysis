@@ -42,6 +42,13 @@ python 06_organise_results.py   MODEL.cif          # MODEL_results/, one folder 
   DNA/RNA records (bases only) are matched only to nucleic chains, also as the reverse
   complement: one record for a duplex names both strands, the second `<name>_complement`
   in a lighter shade. Protein records never match nucleic chains.
+  Two chain groups that match the same record (pieces of one molecule, e.g. 4I6Z's DNA
+  halves C = 1-12 and D = 13-24 of one 24-mer) both take its name; downstream code works by
+  entity_name, so they share one footprint figure with one environment each.
+- Bonded HETATM residues (MSE, SEP, ...) are kept in the polymer by load_model, never as
+  ligands; the analysis log lists them. Fig_chemistry panel b now stacks hydrophobic
+  residue pairs (>= 3 apolar atom contacts, column `phob` of
+  interaction_density_by_category.csv) after the bonds; the label reads "bonds + pairs".
 - `--ligand-names FILE` names and colours bound ligands: lines `CODE  name  #RRGGBB`
   (CODE = residue name in the model, as listed under "ligands" in run_report.txt). Names
   go into ligands.csv / ligand_contacts.csv, the figure labels and the ChimeraX scripts
