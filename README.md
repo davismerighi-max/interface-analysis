@@ -108,6 +108,17 @@ protein chains. A nucleotide record is also tried as its reverse complement, so 
 for a duplex names both strands: the second is called `<name>_complement` and drawn in a
 lighter shade of the same colour. Give each strand its own record to name them yourself.
 
+If two chains are **pieces of one molecule** — the two halves of a palindromic DNA that the
+PDB lists as one entity (e.g. 4I6Z), or a protein split over two chains — they match the
+same record and **both carry its name**: one footprint figure, with one environment per
+piece, each drawn only over the residues it contains. To name the pieces separately, give
+one record per piece.
+
+Modified residues inside a chain (selenomethionine `MSE`, phosphoserine `SEP`, …) are
+written as HETATM but are part of the polymer: any that is peptide- or
+phosphodiester-bonded to its neighbours stays in the chain and is never counted as a
+bound ligand. `MSE` is treated exactly as `MET`.
+
 ### Naming and colouring bound ligands
 
 Ligands and cofactors are found automatically and called by their residue code (`UMP`,
