@@ -565,6 +565,23 @@ with RPT.guard('chemistry tables', ok_detail='composition and density tables'):
         dens.append(dict(ctg=c, salt=1000 * sub.sb.sum() / A3, hbond=1000 * sub.hb.sum() / A3,
                          stack=(1000 * nar.kind.str.startswith('pi_stack').sum() / n_units / A3) if len(nar) else 0.0,
                          catpi=(1000 * (nar.kind == 'cation_pi').sum() / n_units / A3) if len(nar) else 0.0))
+    # hydrophobic contacts: residue pairs with >= 3 apolar atom contacts (the rule of the
+    # footprint and network figures), averaged over the copies of each orbit like the bonds
+    try:
+        HP = pd.read_csv('interface_hydrophobic.csv')
+        HP = HP[HP.n_contacts >= int(CFG.get('phobic_min', 3))]
+        npair = HP.groupby(['c1', 'c2']).size()
+        S_ = S.copy()
+        S_['nph'] = [int(npair.get((a, b), 0)) + (int(npair.get((b, a), 0)) if a != b else 0)
+                     for a, b in zip(S_.c1, S_.c2)]
+        ph = S_.groupby('orbit').agg(ctg=('ctg', 'first'), area=('area', 'mean'),
+                                     nph=('nph', 'mean'))
+        for d in dens:
+            sub = ph[ph.ctg == d['ctg']]
+            d['phob'] = 1000 * sub.nph.sum() / max(sub.area.sum(), 1e-9)
+    except (FileNotFoundError, pd.errors.EmptyDataError, AttributeError, KeyError):
+        for d in dens:
+            d['phob'] = 0.0
     DEN = pd.DataFrame(dens).set_index('ctg')
     DEN.to_csv('interaction_density_by_category.csv')
     say('\ninteraction density per 1000 A2 buried:'); say(DEN.round(2).to_string())
