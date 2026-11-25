@@ -146,7 +146,8 @@ BUDG = pd.read_csv('subunit_budget.csv')
 COMP = pd.read_csv('interface_composition_by_category.csv', index_col=0)
 DEN = pd.read_csv('interaction_density_by_category.csv', index_col=0)
 
-ENTS = [e['name'] for e in CFG['entities']]
+# two entities may share a name (parts of one molecule matched to the same FASTA record)
+ENTS = list(dict.fromkeys(e['name'] for e in CFG['entities']))
 PALS = fs.assign_palettes(ENTS)
 _cfgcol = CFG.get('colours') or {}
 for _k, _v in _cfgcol.items():                     # colours from the --proteins FASTA
@@ -357,13 +358,18 @@ def read_alignment(path):
 
 
 def _model_seq(entity):
-    """(one-letter sequence, residue numbers) of the first chain of `entity`."""
+    """(one-letter sequence, residue numbers) of `entity`: the union, by residue number,
+    of all its chains, so a molecule modelled in pieces (e.g. two halves of one DNA, or a
+    protein split over two chains) maps onto its alignment as a whole."""
     from Bio.SeqUtils import seq1
-    ch = next((c for c in GEO.index if prot[c] == entity), None)
-    if ch is None:
-        return '', []
-    rs = [r for r in model[ch] if r.id[0] == ' ']
-    return ''.join(seq1(r.get_resname()) for r in rs), [r.id[1] for r in rs]
+    seen = {}
+    for c in GEO.index:
+        if prot[c] == entity:
+            for r in model[c]:
+                if r.id[0] == ' ' and r.id[1] not in seen:
+                    seen[r.id[1]] = r.get_resname()
+    nums = sorted(seen)
+    return ''.join(seq1(seen[n]) for n in nums), nums
 
 
 def _map_reference(ref, mseq):
@@ -676,6 +682,12 @@ with RPT.guard('footprint figures', ok_detail='fig1..N_<protein>_footprints'):
         for k, e in enumerate(envs):
             P = pivs[e]; tot = P.sum(axis=1)
             nco = sum(1 for c in env_of if env_of[c] == e)
+            # residues this environment's chains actually contain: a molecule modelled in
+            # pieces (two halves of one DNA) shares the axis, but each piece draws its
+            # density, ΔG and conservation only where it has residues
+            _have = {r.id[1] for c in env_of if env_of[c] == e and prot.get(c) == ent
+                     for r in model[c] if r.id[0] == ' '}
+            _hlo, _hhi = (min(_have), max(_have)) if _have else (lo, hi)
             fig.text(L, (H - y - 0.06) / H,
                      f'environment {env_tag(e)}  ({nco} copies)   ·   '
                      f'{tot.sum():.0f} Å$^2$ buried per monomer',
@@ -744,7 +756,7 @@ with RPT.guard('footprint figures', ok_detail='fig1..N_<protein>_footprints'):
 
                 axd = axes_at(y, dh)
                 pad = 15                             # smooth with a margin, then crop
-                w = P.index[(P.index >= s0 - pad) & (P.index <= s1 + pad)]
+                w = P.index[(P.index >= max(s0 - pad, _hlo)) & (P.index <= min(s1 + pad, _hhi))]
                 axd.set_xlim(x0, x1); fig.canvas.draw()
                 fs.density_plot(axd, w.to_numpy(), tot.reindex(w).fillna(0).to_numpy(),
                                 DARK[ent], vmax=dmax)
@@ -757,7 +769,7 @@ with RPT.guard('footprint figures', ok_detail='fig1..N_<protein>_footprints'):
                 if solv:
                     y += GAP_CONS
                     axs_ = axes_at(y, sh)
-                    xs2 = np.array([r for r in range(s0, s1 + 1) if r in solv])
+                    xs2 = np.array([r for r in range(s0, s1 + 1) if r in solv and r in _have])
                     if len(xs2):
                         vals = np.array([solv[r] for r in xs2])
                         lim = max(1e-9, np.percentile(np.abs(list(solv.values())), 97))
@@ -778,7 +790,7 @@ with RPT.guard('footprint figures', ok_detail='fig1..N_<protein>_footprints'):
                 if cons:
                     y += GAP_CONS
                     axc = axes_at(y, chh)
-                    seg_r = [r for r in range(s0, s1 + 1) if r in cons]
+                    seg_r = [r for r in range(s0, s1 + 1) if r in cons and r in _have]
                     if seg_r:
                         axc.bar(seg_r, [1] * len(seg_r), width=1.0, align='center',
                                 color=[fs.CONSURF[cons[r] - 1] for r in seg_r],
@@ -1066,20 +1078,25 @@ with RPT.guard('fig_chemistry', ok_detail='written'):
     ax.set_title('a   Chemistry of the buried surface', fontsize=8, loc='left', pad=4, color=fs.INK)
     tidy(ax)
     ax2 = fig.add_subplot(gs[0, 1])
-    ax2.set_xlim(0, max(1e-9, float(DEN.sum(axis=1).max())) * 1.20)
+    _IK = ['salt', 'hbond', 'stack', 'catpi'] + (['phob'] if 'phob' in DEN.columns else [])
+    ax2.set_xlim(0, max(1e-9, float(DEN[_IK].sum(axis=1).max())) * 1.32)
     bar_ylim(ax2, len(CATS), len(CATS)); fig.canvas.draw()
     for yy_, c in zip(y, CATS):
         left = 0.0
-        for k in ['salt', 'hbond', 'stack', 'catpi']:
+        for k in _IK:
             w = float(DEN.loc[c, k]) if c in DEN.index else 0.0
             if w > 0.02:
                 fs.sbarh(ax2, yy_, w, left=left, height=0.62, color=fs.INTCOL[k],
                          round_pt=1.6, gap_pt=1.0)
             left += w
-        ax2.text(left + 0.4, yy_, f'{left:.1f}', va='center', fontsize=6, color='#555555')
+        _ph = float(DEN.loc[c, 'phob']) if ('phob' in _IK and c in DEN.index) else 0.0
+        # the label keeps bonds and apolar contacts apart: they are different kinds of count
+        _lab = f'{left - _ph:.1f}' + (f' + {_ph:.1f}' if _ph > 0.05 else '')
+        ax2.text(left + ax2.get_xlim()[1] * 0.012, yy_, _lab, va='center', fontsize=6,
+                 color='#555555')
     ax2.set_yticks(y); ax2.set_yticklabels([])
-    ax2.set_xlabel('specific interactions per 1000 Å$^2$ buried')
-    ttl = 'b   Directional interactions'
+    ax2.set_xlabel('interactions per 1000 Å$^2$ buried')
+    ttl = 'b   Interactions' if 'phob' in _IK else 'b   Directional interactions'
     if LOWCONF:
         ttl += f'\n     ({LOWTXT})'
     ax2.set_title(ttl, fontsize=8, loc='left', pad=4, color=fs.INK)
@@ -1088,12 +1105,18 @@ with RPT.guard('fig_chemistry', ok_detail='written'):
     l1 = fig.legend(handles=h1, frameon=False, fontsize=6.3, loc='upper left',
                     bbox_to_anchor=(0.815, _TOP - 0.02), handlelength=1.1, labelspacing=0.45,
                     title='residue class', title_fontsize=6.8); l1._legend_box.align = 'left'
-    h2 = [mpl.patches.Patch(fc=fs.INTCOL[k], ec='none', label=BLAB[k])
-          for k in ['salt', 'hbond', 'stack', 'catpi']]
+    h2 = [mpl.patches.Patch(fc=fs.INTCOL[k], ec='none',
+                            label=BLAB[k] if k != 'phob' else 'hydrophobic contact')
+          for k in _IK]
     l2 = fig.legend(handles=h2, frameon=False, fontsize=6.3, loc='upper left',
                     bbox_to_anchor=(0.815, _TOP - 0.40), handlelength=1.1, labelspacing=0.45,
                     title='interaction type', title_fontsize=6.8); l2._legend_box.align = 'left'
     refit_bars(fig, gs, [l1, l2], len(CATS), head=_HEAD, foot=0.52, lg_x=0.828)
+    if 'phob' in _IK:
+        fig.text(0.165, 0.012, 'b: salt bridges, hydrogen bonds, stacking and cation–π are '
+                 'counted per bond; hydrophobic contacts per residue pair with ≥ 3 apolar\n'
+                 'atom contacts. The label gives bonds + hydrophobic pairs.', fontsize=5.2,
+                 color='#888888', ha='left', va='bottom', linespacing=1.4)
     save(fig, 'fig_chemistry')
 
 # ============================================================ contact maps
