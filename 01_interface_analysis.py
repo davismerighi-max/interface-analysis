@@ -47,7 +47,7 @@ MAXASA = {'ALA': 129, 'ARG': 274, 'ASN': 195, 'ASP': 193, 'CYS': 167, 'GLU': 223
           'GLN': 225, 'GLY': 104, 'HIS': 224, 'ILE': 197, 'LEU': 201, 'LYS': 236,
           'MET': 224, 'PHE': 240, 'PRO': 159, 'SER': 155, 'THR': 172, 'TRP': 285,
           'TYR': 263, 'VAL': 174, 'MSE': 224}
-APOLAR = {'C', 'S'}
+APOLAR = {'C', 'S', 'SE'}          # SE: selenomethionine, apolar like the S it replaces
 ACID = {('ASP', 'OD1'), ('ASP', 'OD2'), ('GLU', 'OE1'), ('GLU', 'OE2')}
 BASE = {('ARG', 'NE'), ('ARG', 'NH1'), ('ARG', 'NH2'), ('LYS', 'NZ'),
         ('HIS', 'ND1'), ('HIS', 'NE2')}
@@ -59,6 +59,7 @@ ADDITIVES = {'SO4', 'PO4', 'GOL', 'EDO', 'PEG', 'PG4', 'PGE', 'MPD', 'ACT', 'FMT
              'TRS', 'EPE', 'MES', 'IMD', 'CIT', 'TLA', 'BME', 'DTT', 'NO3', 'AZI', 'IOD',
              'BR', 'CL', 'F', 'FLC', 'ACY', 'BCT'}
 LIGAND_RESN = set()                 # filled by load_model; used by atom_class
+MODRES = []                         # modified residues kept in the polymer (load_model)
 METAL_IONS = {'ZN', 'MG', 'CA', 'FE', 'FE2', 'MN', 'CU', 'CU1', 'NI', 'CO', 'CD',
               'NA', 'K', 'MO', 'W', 'HG', 'PT', 'AU', 'AG', 'SR', 'BA'}
 
@@ -89,7 +90,7 @@ def atom_class(resn, an, el):
         return 'ligand'
     if el == 'C':
         return 'C'
-    if el == 'S':
+    if el in ('S', 'SE'):                  # MSE's selenium solvates like MET's sulfur
         return 'S'
     if el == 'P':
         return 'P'
@@ -117,6 +118,29 @@ def load_model(path, keep_ligands=True, min_ligand_atoms=5):
     p = MMCIFParser(QUIET=True) if path.lower().endswith(('.cif', '.mmcif')) else PDBParser(QUIET=True)
     model = p.get_structure('m', path)[0]
     hyd, renum, metals, ligands = [], [], [], []
+    # Modified residues INSIDE a chain (selenomethionine MSE, phosphoserine SEP, ...) are
+    # written as HETATM but are part of the polymer: one that is peptide- or
+    # phosphodiester-bonded to a neighbour is turned back into a polymer residue, so it is
+    # never mistaken for a bound ligand. A free amino acid or nucleotide bound in a pocket
+    # has no such bond and stays a ligand.
+    for ch in model:
+        rl = list(ch)
+        for k, r in enumerate(rl):
+            if r.id[0] in (' ', 'W') or r.get_resname().strip().upper() in WATERS:
+                continue
+            linked = False
+            for j in (k - 1, k + 1):
+                if not 0 <= j < len(rl):
+                    continue
+                a, b = (rl[j], r) if j < k else (r, rl[j])       # a precedes b
+                for x, y, cut in (('C', 'N', 1.9), ("O3'", 'P', 2.0)):
+                    if x in a and y in b and a[x] - b[y] < cut:
+                        linked = True
+            if linked:
+                new_id = (' ', r.id[1], r.id[2])
+                if new_id not in ch:
+                    r.id = new_id
+                    MODRES.append(r.get_resname().strip().upper())
     for ch in model:
         for r in list(ch):
             if r.id[0] != ' ':                        # waters, ligands, ions
@@ -291,6 +315,10 @@ def main():
     if renumbered:
         log('  NOTE: insertion codes or duplicate residue numbers found; affected chains were '
             'renumbered sequentially. Original labels are in residue_renumbering.csv.')
+    if MODRES:
+        _mc = collections.Counter(MODRES)
+        log('  modified residues kept in the polymer chain (bonded to their neighbours, so '
+            'not ligands): ' + ', '.join(f'{n}x{k}' for k, n in _mc.items()))
     if not hyd:
         log('  NOTE: no hydrogens in the model (usual for X-ray). Hydrogen bonds fall back to a '
             'donor-acceptor DISTANCE criterion with no angle check, which over-counts; '
@@ -324,10 +352,8 @@ def main():
                     notes.append(f'{names[i]}: {note}, kept default name and colour')
                     continue
                 if rec['name'] in used:
-                    notes.append(f'{names[i]}: also matches "{rec["name"]}", already used by '
-                                 f'{used[rec["name"]]}; kept default name')
-                    continue
-                used[rec['name']] = names[i]
+                    notes.append(f'{rec["name"]}: {note}')
+                used.setdefault(rec['name'], names[i])
                 names[i] = rec['name']; n_hit += 1
                 if rec['colour']:
                     colours[rec['name']] = rec['colour']
@@ -339,7 +365,8 @@ def main():
                        + (f'; colours set for {len(colours)}' if colours else ''))
             for nline in notes:
                 log('  proteins: ' + nline)
-            serious = [x for x in notes if not x.startswith('in the FASTA but not')]
+            serious = [x for x in notes if not x.startswith('in the FASTA but not')
+                       and 'both carry this name' not in x]
             if n_hit == len([r for r in reps if r[1] != 'ligand']) and not serious:
                 RPT.ok('protein details (FASTA)', summary + ': ' + ', '.join(names)
                      + ('' if not notes else ' (' + '; '.join(notes) + ')'))
