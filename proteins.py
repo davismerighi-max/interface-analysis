@@ -18,6 +18,7 @@ proteins claiming the same record — falls back to the default and is reported,
 fatal.
 """
 import re
+import collections
 from difflib import SequenceMatcher
 
 HDR = re.compile(r'^\s*(.+?)(?:[\s_|]+(#[0-9A-Fa-f]{6}))?\s*$')
@@ -84,39 +85,50 @@ def match_entities(reps, recs, min_cover=0.90):
     would otherwise "match" almost any long protein sequence. A DNA/RNA chain is also
     compared with the reverse complement of each record, so ONE line for a duplex names
     both strands: the second is called <name>_complement (same colour)."""
-    out = []
+    out, used = [], collections.Counter()
     for seq, kind in reps:
         if kind == 'ligand' or not seq:
             out.append((None, 0.0, 'ligand-only chain, not matched')); continue
         nuc = kind == 'nucleic'
-        best, cov, rc = None, 0.0, False
+        cands = []                               # (coverage, is_reverse_complement, record)
         for r in recs:
             if not r['seq'] or is_nucleotide(r['seq']) != nuc:
                 continue
             if nuc:
                 fwd = coverage(_nt(seq), _nt(r['seq']))
                 rev = coverage(_nt(seq), _nt(r['seq']).translate(_COMP)[::-1])
-                c, is_rc = (fwd, False) if fwd >= rev else (rev, True)
+                cands.append((fwd, False, r) if fwd >= rev else (rev, True, r))
             else:
-                c, is_rc = coverage(seq, r['seq']), False
-            if c > cov:
-                best, cov, rc = r, c, is_rc
+                cands.append((coverage(seq, r['seq']), False, r))
         what = 'nucleotide' if nuc else 'protein'
-        if best is not None and cov >= min_cover:
+        best = max((c[0] for c in cands), default=0.0)
+        if best >= min_cover:
+            # among equally good records, take one no other chain group has used yet, so
+            # two rows with the same sequence but different names name two groups
+            tied = [c for c in cands if c[0] >= best - 1e-9]
+            # (a complementary strand instead goes with the record its partner strand used)
+            cov, rc, rec = min(tied, key=lambda c: -used[id(c[2])] if c[1] else used[id(c[2])])
+            again = used[id(rec)] > 0
+            used[id(rec)] += 1
             if rc:
                 # same hue, lighter, so the two strands can be told apart as partners
-                col = best['colour']
+                col = rec['colour']
                 if col:
                     rgb = [int(col[k:k + 2], 16) for k in (1, 3, 5)]
                     col = '#' + ''.join(f'{int(v + 0.45 * (255 - v)):02X}' for v in rgb)
-                best = dict(best, name=best['name'] + '_complement', colour=col)
-            out.append((best, cov, f'matched "{best["name"]}" ({100 * cov:.0f} % of the '
-                                   'modelled sequence'
-                                   + (', complementary strand)' if rc else ')')))
+                rec = dict(rec, name=rec['name'] + '_complement', colour=col)
+            note = (f'matched "{rec["name"]}" ({100 * cov:.0f} % of the modelled sequence'
+                    + (', complementary strand' if rc else '') + ')')
+            if again and not rc:
+                note += ('; another part of the model matched the same record, so both '
+                         'carry this name (one molecule modelled in pieces)')
+            out.append((rec, cov, note))
         else:
-            near = (f'; closest was "{best["name"]}" at {100 * cov:.0f} %' if best else '')
-            out.append((None, cov, f'no {what} record covers ≥{100 * min_cover:.0f} % of '
-                                   f'this sequence{near}'))
+            near = max(cands, key=lambda c: c[0]) if cands else None
+            out.append((None, best, f'no {what} record covers ≥{100 * min_cover:.0f} % of '
+                                    f'this sequence'
+                                    + (f'; closest was "{near[2]["name"]}" at '
+                                       f'{100 * best:.0f} %' if near else '')))
     return out
 
 
