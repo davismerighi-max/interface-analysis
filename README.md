@@ -159,7 +159,12 @@ report and sets the distance tolerances; read from the file header when not give
 **`03_make_figures.py`** — `--per-line` (350 residues) · `--colours` · `--bsa-min` ·
 `--solvation-track` · `--no-interaction-track` · `--network-min` · `--phobic-min` (apolar atom contacts a residue pair needs to count as a
 hydrophobic contact in the footprints, networks, renders and ChimeraX script; default 3) ·
-`--network-per-page` · `--sc-offset` · `--conservation` (a ConSurf `.grades` file) ·
+`--network-per-page` · `--sc-offset` · `--partner-colours auto|molecule|subunit` (partner
+segments of the budget, footprint and 3D-budget figures in shades of the partner molecule's
+colour, one shade per symmetry environment — the colours of the contact-topology plot — so
+e.g. the two strands of a DNA are told apart; `auto`: budgets and render always by subunit,
+footprints by subunit when the model has ≤ 6 environments; the split is also written to
+`subunit_budget_by_partner_subunit.csv`) · `--conservation` (a ConSurf `.grades` file) ·
 `--msa` (an alignment — aligned FASTA, A3M from ColabFold/HHblits, Clustal or Stockholm;
 `--msa tube=tube.a3m,belt=belt.fasta` for several proteins. The first sequence is the
 reference; it is aligned to the modelled sequence, so a full-length reference is fine.
