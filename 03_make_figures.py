@@ -71,6 +71,12 @@ ap.add_argument('--sc-offset', type=float, default=0.0, metavar='X',
                      'scale of the original sc program; this implementation reads about '
                      '0.05 low against it, so --sc-offset 0.05 puts the band edges on the '
                      'measured scale instead.')
+ap.add_argument('--partner-colours', default='auto', choices=['auto', 'molecule', 'subunit'],
+                help='colour the partner segments of the budget and footprint figures by '
+                     'partner MOLECULE, or by partner SUBUNIT (symmetry environment) in shades '
+                     'of the molecule colour, so e.g. the two strands of a DNA are told apart. '
+                     'auto (default): budgets by subunit; footprints by subunit when the model '
+                     'has at most 6 environments, otherwise by molecule.')
 ap.add_argument('--bsa-min', type=float, default=10.0, metavar='A2',
                 help='minimum buried area for a residue to be coloured in the ChimeraX '
                      'script; everything below stays grey (default 10 A2)')
@@ -190,6 +196,42 @@ Bk = B.set_index(['c1', 'c2']).sort_index()
 ARk = AR.set_index(['c1', 'c2']).sort_index() if len(AR) else None
 prot = dict(zip(GEO.index, GEO.entity_name))
 env_of = dict(zip(GEO.index, GEO.environment))
+# Subunit colours: each symmetry environment (a chain, or a set of symmetry copies) gets a
+# shade of its molecule's colour -- the scheme of the contact-topology plot -- so partner
+# segments can say WHICH subunit buries a surface, e.g. which strand of a DNA.
+ENVORD, ENVCOL, ENVLAB = [], {}, {}
+for _e in ENTS:
+    _mine = sorted({env_of[c] for c in GEO.index if GEO.loc[c, 'entity_name'] == _e})
+    for _i, _x in enumerate(_mine):
+        ENVORD.append(_x)
+        ENVCOL[_x] = fs.shade_of(PALS[_e], _i, len(_mine))
+        ENVLAB[_x] = f'{_e} {env_tag(_x)}' if len(_mine) > 1 else _e
+ENV_ENT = {x: GEO.loc[x[0], 'entity_name'] for x in ENVORD}
+_split = any(sum(1 for x in ENVORD if ENV_ENT[x] == e) > 1 for e in ENTS)
+SUB_BUDGET = args.partner_colours != 'molecule' and _split
+SUB_FOOT = (not HOMO and _split and 'penv' in ENV.columns
+            and (args.partner_colours == 'subunit'
+                 or (args.partner_colours == 'auto' and len(ENVORD) <= 6)))
+if SUB_FOOT:
+    PARTKEY = 'penv'
+    PARTCOL = dict(ENVCOL)
+PARTLAB = dict(ENVLAB) if SUB_FOOT else {}
+# buried area of every chain, split by partner subunit (both directions of each pair)
+_bp = [(r.c1, env_of[r.c2], r.area) for r in S.itertuples()] + \
+      [(r.c2, env_of[r.c1], r.area) for r in S.itertuples()]
+BPE = (pd.DataFrame(_bp, columns=['chain', 'penv', 'area'])
+       .pivot_table(index='chain', columns='penv', values='area', aggfunc='sum')
+       .reindex(index=list(GEO.index), columns=ENVORD).fillna(0.0))
+_out = BPE.copy(); _out.columns = [ENVLAB[x] for x in BPE.columns]
+_out.insert(0, 'environment', [env_of[c] for c in _out.index])
+_out.insert(1, 'molecule', [GEO.loc[c, 'entity_name'] for c in _out.index])
+_out.to_csv('subunit_budget_by_partner_subunit.csv', index_label='chain')
+if SUB_BUDGET:
+    BKEYS, BCOL, BLAB_ = ENVORD, ENVCOL, ENVLAB
+    BUD = BPE
+else:
+    BKEYS, BCOL, BLAB_ = ENTS, PAL, {e: e for e in ENTS}
+    BUD = BPE.T.groupby(lambda x: ENV_ENT[x]).sum().T.reindex(columns=ENTS).fillna(0.0)
 REP = S.sort_values('area', ascending=False).groupby('orbit').first().reset_index()
 
 p = MMCIFParser(QUIET=True) if MODEL.lower().endswith(('.cif', '.mmcif')) else PDBParser(QUIET=True)
@@ -623,7 +665,9 @@ with RPT.guard('footprint figures', ok_detail='fig1..N_<protein>_footprints'):
         sub_all = ENV[ENV.entity_name == ent]
         envs = sorted(sub_all.env.unique())
         parts = [k for k in sub_all[PARTKEY].unique()]
-        parts = [c for c in CATS if c in parts] if HOMO else [e for e in ENTS if e in parts]
+        parts = ([c for c in CATS if c in parts] if HOMO else
+                 [x for x in ENVORD if x in parts] if SUB_FOOT else
+                 [e for e in ENTS if e in parts])
         lo, hi = int(sub_all.resi.min()), int(sub_all.resi.max())
         span = hi - lo + 1
         nseg = max(1, int(round(span / PERLINE)))
@@ -818,7 +862,7 @@ with RPT.guard('footprint figures', ok_detail='fig1..N_<protein>_footprints'):
                                      label=r'$\bf{' + t.replace(' ', r'\ ') + '}$')
 
         groups = [[title(lab)] + [mpl.patches.Patch(fc=PARTCOL.get(k, '#999999'), ec='none',
-                                                    label=str(k)) for k in parts]]
+                                                    label=PARTLAB.get(k, str(k))) for k in parts]]
         if HAS_INT:
             g = [title('interaction')]
             g += [mpl.patches.Patch(fc=fs.INTCOL[k], ec='none', label=t)
@@ -884,11 +928,6 @@ with RPT.guard('fig_architecture', ok_detail='written'):
     gs = fig.add_gridspec(1, 1, left=0.085, right=0.76, top=0.92, bottom=0.13)
     ax = fig.add_subplot(gs[0, 0])
     envs_all = sorted(set(env_of.values()))
-    ENVCOL = {}
-    for e in ENTS:
-        mine = [x for x in envs_all if prot[x[0]] == e]
-        for i, x in enumerate(mine):
-            ENVCOL[x] = fs.shade_of(PALS[e], i, len(mine))
     for _, r in S.iterrows():
         t1, z1 = GEO.loc[r.c1, 'theta'], GEO.loc[r.c1, 'z']
         t2, z2 = GEO.loc[r.c2, 'theta'], GEO.loc[r.c2, 'z']
@@ -1021,10 +1060,11 @@ with RPT.guard('fig_inventory', ok_detail='written'):
     ax2.set_xlim(0, xmax); bar_ylim(ax2, len(rows), len(rows)); fig.canvas.draw()
     for yy_, e in zip(y, rows):
         left = 0.0
-        for part in ENTS:
-            w = BUDG[BUDG.env == e][part].mean()
+        _row = BUD.loc[[c for c in BUD.index if env_of[c] == e]].mean()
+        for part in BKEYS:
+            w = float(_row.get(part, 0.0))
             if w > 1:
-                fs.sbarh(ax2, yy_, w, left=left, height=0.62, color=PAL[part], round_pt=2.0, gap_pt=1.1)
+                fs.sbarh(ax2, yy_, w, left=left, height=0.62, color=BCOL[part], round_pt=2.0, gap_pt=1.1)
             left += w
         ax2.text(left + xmax * 0.015, yy_, f'{left:.0f}', va='center', fontsize=6, color='#555555')
     ax2.set_yticks(y); ax2.set_yticklabels([env_str(e, 9) for e in rows], fontsize=6.2)
@@ -1034,7 +1074,8 @@ with RPT.guard('fig_inventory', ok_detail='written'):
     ax2.set_title('b   Interface budget of each symmetry-independent subunit',
                   fontsize=8, loc='left', pad=4, color=fs.INK)
     tidy(ax2)
-    hh = [mpl.patches.Patch(fc=PAL[p_], ec='none', label=f'buried by {p_}') for p_ in ENTS]
+    _used = [p_ for p_ in BKEYS if BUD[p_].sum() > 0]
+    hh = [mpl.patches.Patch(fc=BCOL[p_], ec='none', label=f'buried by {BLAB_[p_]}') for p_ in _used]
     lg = fig.legend(handles=hh, frameon=False, fontsize=6.4, loc='upper left',
                     bbox_to_anchor=(0.808, _TOP - 0.02), handlelength=1.1, labelspacing=0.5,
                     title='partner', title_fontsize=6.8)
@@ -1238,14 +1279,15 @@ with RPT.guard('fig_area_partition', ok_detail='written'):
     ax2 = fig.add_subplot(gs[0, 1]); y2 = np.arange(len(ENTS))[::-1]
     ax2.set_xlim(0, 100); bar_ylim(ax2, len(ENTS), len(ENTS)); fig.canvas.draw()
     for yy_, e in zip(y2, ENTS):
-        tot = BUDG[BUDG.entity_name == e][ENTS].mean(); pct = 100 * tot / max(tot.sum(), 1e-9)
+        tot = BUD.loc[[c for c in BUD.index if prot[c] == e]].mean()
+        pct = 100 * tot / max(tot.sum(), 1e-9)
         left = 0.0
-        for part in ENTS:
-            w = pct[part]
+        for part in BKEYS:
+            w = float(pct.get(part, 0.0))
             if w > 0.4:
-                fs.sbarh(ax2, yy_, w, left=left, height=0.60, color=PAL[part], round_pt=2.0, gap_pt=1.1)
+                fs.sbarh(ax2, yy_, w, left=left, height=0.60, color=BCOL[part], round_pt=2.0, gap_pt=1.1)
                 if w > 11:                          # narrower segments cannot hold the text
-                    _cc = mpl.colors.to_rgb(PAL[part])
+                    _cc = mpl.colors.to_rgb(BCOL[part])
                     _light = (0.299 * _cc[0] + 0.587 * _cc[1] + 0.114 * _cc[2]) > 0.62
                     ax2.text(left + w / 2, yy_, f'{w:.0f}%', ha='center', va='center',
                              fontsize=6, color='#333333' if _light else '#FFFFFF',
@@ -1259,7 +1301,8 @@ with RPT.guard('fig_area_partition', ok_detail='written'):
     ax2.set_xlabel('share of that subunit’s buried surface (%)'); ax2.set_xticks([0, 25, 50, 75, 100])
     ax2.set_title('b   Interface budget', fontsize=8, loc='left', pad=4, color=fs.INK)
     tidy(ax2)
-    hh = [mpl.patches.Patch(fc=PAL[p_], ec='none', label=f'with {p_}') for p_ in ENTS]
+    _used = [p_ for p_ in BKEYS if BUD[p_].sum() > 0]
+    hh = [mpl.patches.Patch(fc=BCOL[p_], ec='none', label=f'with {BLAB_[p_]}') for p_ in _used]
     lg = fig.legend(handles=hh, frameon=False, fontsize=6.4, loc='upper left',
                     bbox_to_anchor=(0.80, _TOP - 0.02), handlelength=1.1, labelspacing=0.5,
                     title='partner', title_fontsize=6.8); lg._legend_box.align = 'left'
@@ -1845,11 +1888,14 @@ else:
     _BUR = pd.read_csv('residue_burial_assembly.csv')
     _bur = {(r.chain, int(r.resi)): float(r.buried) for r in _BUR.itertuples()}
     # area each residue loses to each partner PROTEIN, summed over the partner chains
+    # (by partner SUBUNIT in shades of the molecule colour, as in the budget figures)
+    _pk = (lambda c: env_of[c]) if SUB_BUDGET else (lambda c: prot[c])
+    RKEYS, RCOL, RLAB = (ENVORD, ENVCOL, ENVLAB) if SUB_BUDGET else (ENTS, PAL, {e: e for e in ENTS})
     _by = collections.defaultdict(lambda: collections.defaultdict(float))
     for r in RES_ALL.itertuples():
         partner = r.c2 if r.chain == r.c1 else r.c1
         if partner in prot:
-            _by[(r.chain, int(r.resi))][prot[partner]] += float(r.dsasa)
+            _by[(r.chain, int(r.resi))][_pk(partner)] += float(r.dsasa)
     _cov = set()
     if len(LINKS):
         _Lk = LINKS[(LINKS.kind.isin(['disulfide', 'isopeptide'])) & (LINKS.bonded == True)]
@@ -1858,9 +1904,9 @@ else:
             # a bonded residue counts as buried by the protein it is bonded to, even if it
             # buries little surface, so both renders mark the same residues
             if r.c2 in prot:
-                _by[(r.c1, int(r.resi1))][prot[r.c2]] += 0.0
+                _by[(r.c1, int(r.resi1))][_pk(r.c2)] += 0.0
             if r.c1 in prot:
-                _by[(r.c2, int(r.resi2))][prot[r.c1]] += 0.0
+                _by[(r.c2, int(r.resi2))][_pk(r.c1)] += 0.0
     G_OUT, G_NONSPEC = '#E3E3E3', '#BDBDBD'
     _KIND_ORDER = ('salt', 'catpi', 'stack', 'hbond', 'phob')
     ICOL = {'covalent': fs.COVALENT, 'none': G_NONSPEC}
@@ -1889,11 +1935,11 @@ else:
                 cls = None
             if part is None and at_if:
                 part = '_multi'      # buried only when several chains are present together
-            cb.append(PAL[part] if part in PAL else (G_NONSPEC if part == '_multi' else G_OUT))
+            cb.append(RCOL[part] if part in RCOL else (G_NONSPEC if part == '_multi' else G_OUT))
             ci.append(ICOL[cls] if cls else G_OUT)
             _nb[part] += 1; _ni[cls] += 1
             _rows.append((ch.id, res.id[1], prot.get(ch.id, ''),
-                          {None: '', '_multi': 'several chains together'}.get(part, part),
+                          {None: '', '_multi': 'several chains together'}.get(part, RLAB.get(part, part)),
                           cls or ''))
         if len(pts) >= 4:
             P_ = np.asarray(pts, float)
@@ -1950,9 +1996,9 @@ else:
            for e in ENTS if any(prot.get(c) == e for c in _CA)]
     _render(_cp, 'coloured by molecule (shades = individual chains)', _hp,
             'fig_render_proteins', note='symmetry axis = z')
-    _hb = [mpl.patches.Patch(fc=PAL[e], ec='#1E1E1E', lw=0.3,
-                             label=f'buried mainly by {e}  ({_nb[e]:,})')
-           for e in ENTS if _nb[e]]
+    _hb = [mpl.patches.Patch(fc=RCOL[e], ec='#1E1E1E', lw=0.3,
+                             label=f'buried mainly by {RLAB[e]}  ({_nb[e]:,})')
+           for e in RKEYS if _nb[e]]
     if _nb['_multi']:
         _hb.append(mpl.patches.Patch(fc=G_NONSPEC, ec='#1E1E1E', lw=0.3,
                                      label=f'buried only by several chains together  '
