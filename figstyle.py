@@ -269,18 +269,30 @@ def family_from_hex(hexcol, name=None):
     Lets a user pin a protein to the exact colour their other figures use, while the
     pipeline still has the lighter and darker shades it needs to separate symmetry
     copies and to draw density tracks.
+
+    A colour that is one of the built-in family colours gets that family's hand-tuned
+    shades. Any other colour is shaded in HLS space: the lightness changes while hue and
+    saturation are kept, so the dark shades stay vivid instead of turning grey or brown
+    (blending with black, as before, muddied them).
     """
+    import colorsys
     import matplotlib.colors as mc
     c = hexcol.strip()
     c = c if c.startswith('#') else '#' + c
-    mc.to_rgb(c)                                   # raises on a malformed colour
-    hexof = (lambda t: mc.to_hex(t))
+    rgb = mc.to_rgb(c)                             # raises on a malformed colour
+    for fam in FAMILIES:
+        if fam['pal'].lower() == c.lower():
+            return dict(fam, name=name or fam['name'])
+    h, l, s = colorsys.rgb_to_hls(*rgb)
+
+    def hls(light, sat=1.0):
+        return mc.to_hex(colorsys.hls_to_rgb(h, max(0.0, min(1.0, light)), min(1.0, s * sat)))
+
     return {'name': name or c,
             'pal': c,
-            'dark': hexof(blend(c, '#1A1A1A', 0.38)),
-            'light': hexof(blend(c, '#FFFFFF', 0.55)),
-            'shades': [hexof(blend(c, '#FFFFFF', 0.55)), c,
-                       hexof(blend(c, '#1A1A1A', 0.22)), hexof(blend(c, '#1A1A1A', 0.45))]}
+            'dark': hls(l * 0.68, 1.1),
+            'light': hls(l + (1 - l) * 0.55, 0.9),
+            'shades': [hls(l + (1 - l) * 0.55, 0.9), c, hls(l * 0.78, 1.1), hls(l * 0.55, 1.15)]}
 
 
 CONSURF = ['#10C8D1', '#8CFFFF', '#D7FFFF', '#EAFFFF', '#FFFFFF',
