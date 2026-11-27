@@ -591,11 +591,61 @@ def fit_labels(fig):
                 t.set_text(_wrap(t.get_text().replace('\n', ''), width))
 
 
+def _report_text_clashes(fig, name):
+    """Development check (INTERACCT_CHECK_TEXT=1): list pairs of text items whose boxes
+    overlap on the page. Text of hidden axes is skipped, and tick labels are compared only
+    with text that is not a tick label of the same axes (rotated tick labels have
+    overlapping boxes without overlapping letters)."""
+    fig.canvas.draw()
+    r = fig.canvas.get_renderer()
+    ticks = {}
+    for ax_ in fig.axes:
+        for t_ in ax_.xaxis.get_ticklabels(which='both') + ax_.yaxis.get_ticklabels(which='both'):
+            ticks[id(t_)] = ax_
+    items = []
+    for t_ in fig.findobj(mpl.text.Text):
+        s_ = t_.get_text().strip()
+        if not s_ or not t_.get_visible() or t_.get_alpha() == 0:
+            continue
+        ax_ = ticks.get(id(t_), t_.axes)
+        if id(t_) in ticks:
+            if not ax_.get_visible() or not ax_.axison:
+                continue
+            axis_ = ax_.xaxis if any(t_ is q for q in ax_.xaxis.get_ticklabels(which='both')) \
+                else ax_.yaxis
+            if not axis_.get_visible():
+                continue
+        elif ax_ is not None and not ax_.get_visible():
+            continue
+        try:
+            bb = t_.get_window_extent(r)
+        except Exception:
+            continue
+        if bb.width < 1 or bb.height < 1:
+            continue
+        items.append((t_, s_, bb.expanded(0.98, 0.94), ticks.get(id(t_))))
+    hits = []
+    for i in range(len(items)):
+        for j in range(i + 1, len(items)):
+            a, b = items[i], items[j]
+            if a[3] is not None and a[3] is b[3]:
+                continue
+            if a[2].overlaps(b[2]):
+                hits.append((a[1][:40], b[1][:40]))
+    for a, b in hits:
+        print(f'  TEXT CLASH in {name}: {a!r} <> {b!r}', flush=True)
+
+
 def save(fig, name):
     try:
         fit_labels(fig)
     except Exception:
         pass                                   # cosmetic only: never block a figure
+    if os.environ.get('INTERACCT_CHECK_TEXT'):
+        try:
+            _report_text_clashes(fig, name)
+        except Exception as _e:
+            print(f'  text check failed on {name}: {_e}', flush=True)
     fig.savefig(name + '.png', dpi=600); fig.savefig(name + '.pdf'); plt.close(fig)
     print('wrote', name, flush=True)
 
@@ -1099,7 +1149,8 @@ with RPT.guard('fig_inventory', ok_detail='written'):
 with RPT.guard('fig_chemistry', ok_detail='written'):
     present = [c for c in CLSORD if c in COMP.columns and COMP[c].sum() > 0]
     _HEAD = 0.62 if LOWCONF else 0.50
-    _FH, _TOP, _BOT = bar_geom(len(CATS), head=_HEAD, foot=0.52)
+    _FOOT = 0.84 if 'phob' in DEN.columns else 0.52   # the footnote needs its own band
+    _FH, _TOP, _BOT = bar_geom(len(CATS), head=_HEAD, foot=_FOOT)
     fig = plt.figure(figsize=(7.2, _FH))
     gs = fig.add_gridspec(1, 2, width_ratios=[1, 1], wspace=0.52,
                           left=0.165, right=0.80, top=_TOP, bottom=_BOT)
@@ -1152,12 +1203,13 @@ with RPT.guard('fig_chemistry', ok_detail='written'):
     l2 = fig.legend(handles=h2, frameon=False, fontsize=6.3, loc='upper left',
                     bbox_to_anchor=(0.815, _TOP - 0.40), handlelength=1.1, labelspacing=0.45,
                     title='interaction type', title_fontsize=6.8); l2._legend_box.align = 'left'
-    refit_bars(fig, gs, [l1, l2], len(CATS), head=_HEAD, foot=0.52, lg_x=0.828)
+    _fh = refit_bars(fig, gs, [l1, l2], len(CATS), head=_HEAD, foot=_FOOT, lg_x=0.828)
     if 'phob' in _IK:
-        fig.text(0.165, 0.012, 'b: salt bridges, hydrogen bonds, stacking and cation–π are '
-                 'counted per bond; hydrophobic contacts per residue pair with ≥ 3 apolar\n'
+        # hung just under the x labels, wherever the legend column puts the axes
+        fig.text(0.165, ax.get_position().y0 - 0.50 / _fh, 'b: salt bridges, hydrogen bonds, stacking and cation–π are '
+                 f'counted per bond; hydrophobic contacts per residue pair with ≥ {CFG.get("phobic_min", 3)} apolar\n'
                  'atom contacts. The label gives bonds + hydrophobic pairs.', fontsize=5.2,
-                 color='#888888', ha='left', va='bottom', linespacing=1.4)
+                 color='#888888', ha='left', va='top', linespacing=1.4)
     save(fig, 'fig_chemistry')
 
 # ============================================================ contact maps
@@ -1248,7 +1300,9 @@ with RPT.guard('fig_contact_maps', ok_detail='written'):
 with RPT.guard('fig_area_partition', ok_detail='written'):
     TOT = S.area.sum()
     catsum = S.groupby('ctg').area.sum().sort_values(ascending=False)
-    _N = max(len(catsum), len(ENTS))
+    _STEP = 1.5 if SUB_BUDGET else 1.2          # row pitch of panel b, in panel-a rows
+    _RB = _STEP * (len(ENTS) - 1) + 1.55        # panel b height, in rows
+    _N = max(len(catsum), _RB - 0.6)
     _FH, _TOP, _BOT = bar_geom(_N, head=0.50, foot=0.56)
     fig = plt.figure(figsize=(7.2, _FH))
     gs = fig.add_gridspec(1, 2, width_ratios=[1.12, 1.0], wspace=0.52,
@@ -1276,25 +1330,42 @@ with RPT.guard('fig_area_partition', ok_detail='written'):
         ax.set_xticks([0, 25, 50, 75, 100])
     ax.set_title(f'a   Total buried surface = {TOT:,.0f} Å$^2$', fontsize=8, loc='left', pad=4, color=fs.INK)
     tidy(ax)
-    ax2 = fig.add_subplot(gs[0, 1]); y2 = np.arange(len(ENTS))[::-1]
-    ax2.set_xlim(0, 100); bar_ylim(ax2, len(ENTS), len(ENTS)); fig.canvas.draw()
+    ax2 = fig.add_subplot(gs[0, 1])
+    # Rows sit further apart than in panel a: above each bar there is a thin bar per partner
+    # molecule (its subunits combined) and then the total, and both need their own room.
+    y2 = _STEP * np.arange(len(ENTS))[::-1]
+    ax2.set_xlim(0, 100); ax2.set_ylim(-0.6, _STEP * (len(ENTS) - 1) + 0.95); fig.canvas.draw()
+
+    def _ink(col):
+        _cc = mpl.colors.to_rgb(col)
+        return '#333333' if (0.299 * _cc[0] + 0.587 * _cc[1] + 0.114 * _cc[2]) > 0.62 else '#FFFFFF'
+
     for yy_, e in zip(y2, ENTS):
         tot = BUD.loc[[c for c in BUD.index if prot[c] == e]].mean()
         pct = 100 * tot / max(tot.sum(), 1e-9)
-        left = 0.0
+        left, span = 0.0, {}
         for part in BKEYS:
             w = float(pct.get(part, 0.0))
             if w > 0.4:
                 fs.sbarh(ax2, yy_, w, left=left, height=0.60, color=BCOL[part], round_pt=2.0, gap_pt=1.1)
-                if w > 11:                          # narrower segments cannot hold the text
-                    _cc = mpl.colors.to_rgb(BCOL[part])
-                    _light = (0.299 * _cc[0] + 0.587 * _cc[1] + 0.114 * _cc[2]) > 0.62
-                    ax2.text(left + w / 2, yy_, f'{w:.0f}%', ha='center', va='center',
-                             fontsize=6, color='#333333' if _light else '#FFFFFF',
-                             fontweight='bold')
+                if w > 5:                           # every segment above 5 %, number only
+                    ax2.text(left + w / 2, yy_, f'{w:.0f}', ha='center', va='center',
+                             fontsize=5.2, color=_ink(BCOL[part]), fontweight='bold')
+                g = ENV_ENT.get(part, part)
+                a0, a1 = span.get(g, (left, left))
+                span[g] = (min(a0, left), left + w)
             left += w
-        ax2.text(50, yy_ + 0.46, f'{tot.sum():,.0f} Å$^2$ total', ha='center', va='bottom',
-                 fontsize=5.8, color='#8A8A8A')
+        if SUB_BUDGET:
+            # one thin bar per partner molecule, spanning its subunits: their combined share
+            for g, (a0, a1) in span.items():
+                w = a1 - a0
+                fs.sbarh(ax2, yy_ + 0.44, w, left=a0, height=0.17, color=PAL[g],
+                         round_pt=1.2, gap_pt=1.1)
+                if w > 5:
+                    ax2.text(a0 + w / 2, yy_ + 0.44, f'{w:.0f}', ha='center', va='center',
+                             fontsize=4.6, color=_ink(PAL[g]), fontweight='bold')
+        ax2.text(50, yy_ + (0.60 if SUB_BUDGET else 0.40), f'{tot.sum():,.0f} Å$^2$ total',
+                 ha='center', va='bottom', fontsize=5.8, color='#8A8A8A')
     ax2.set_yticks(y2); ax2.set_yticklabels([f'{e}\nsubunit' for e in ENTS], fontsize=7)
     for lbl, e in zip(ax2.get_yticklabels(), ENTS):
         lbl.set_color(DARK[e])
@@ -1303,6 +1374,8 @@ with RPT.guard('fig_area_partition', ok_detail='written'):
     tidy(ax2)
     _used = [p_ for p_ in BKEYS if BUD[p_].sum() > 0]
     hh = [mpl.patches.Patch(fc=BCOL[p_], ec='none', label=f'with {BLAB_[p_]}') for p_ in _used]
+    if SUB_BUDGET:
+        hh.append(mpl.patches.Patch(fc='#BDBDBD', ec='none', label='thin bar: subunits\nof one molecule together'))
     lg = fig.legend(handles=hh, frameon=False, fontsize=6.4, loc='upper left',
                     bbox_to_anchor=(0.80, _TOP - 0.02), handlelength=1.1, labelspacing=0.5,
                     title='partner', title_fontsize=6.8); lg._legend_box.align = 'left'
@@ -1312,7 +1385,7 @@ with RPT.guard('fig_area_partition', ok_detail='written'):
     # same top line. Stretching the short one to match the tall one leaves a block of empty
     # axis under three bars.
     _pos = ax2.get_position()
-    _h2 = ROW_IN * (len(ENTS) + 0.6) / fig.get_size_inches()[1]
+    _h2 = ROW_IN * _RB / fig.get_size_inches()[1]
     ax2.set_position([_pos.x0, _pos.y1 - _h2, _pos.width, _h2])
     save(fig, 'fig_area_partition')
 
